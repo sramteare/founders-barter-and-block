@@ -184,12 +184,6 @@ func get_spot_screen_position(kind: String, id: int) -> Vector2:
 		return _unit_to_screen(topo.vertex_positions[id], hex_radius)
 	return size * 0.5
 
-func get_harbour_label_rects() -> Array[Rect2]:
-	return _harbour_label_rects.duplicate()
-
-func get_harbour_boat_rects() -> Array[Rect2]:
-	return _harbour_boat_rects.duplicate()
-
 func _get_hex_radius() -> float:
 	var half_y: float = size.y * 0.5
 	var half_x: float = size.x * 0.5

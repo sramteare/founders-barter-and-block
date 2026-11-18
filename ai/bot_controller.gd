@@ -30,7 +30,7 @@ static func choose_action(state: GameState, player_id: int, difficulty: int = 2)
 			return GameAction.place_settlement(best_v)
 
 		GameTypes.TurnPhase.SETUP_ROAD_1, GameTypes.TurnPhase.SETUP_ROAD_2:
-			var anchor: int = _get_setup_anchor(state)
+			var anchor: int = state.setup_anchor_vertex
 			var valid_edges: Array[int] = RulesEngine.get_valid_road_edges(state, player_id, anchor)
 			if valid_edges.is_empty():
 				valid_edges = RulesEngine.get_valid_road_edges(state, player_id, -1)
@@ -65,15 +65,6 @@ static func choose_action(state: GameState, player_id: int, difficulty: int = 2)
 
 		_:
 			return GameAction.end_turn()
-
-static func _get_setup_anchor(state: GameState) -> int:
-	var val = state.get("setup_anchor_vertex")
-	if val != null:
-		return int(val)
-	var val_cap = state.get("setup_Anchor_vertex")
-	if val_cap != null:
-		return int(val_cap)
-	return -1
 
 static func _choose_main_turn_action(state: GameState, player_id: int, difficulty: int) -> Dictionary:
 	var p: Dictionary = state.players[player_id]

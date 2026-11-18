@@ -2,6 +2,9 @@ extends SceneTree
 
 var _passed: int = 0
 var _failed: int = 0
+var _hs_active: bool = false
+var _hs_ui: Node = null
+var _hs_seats: Array[SeatConfig] = []
 
 func _init() -> void:
 	print("=== Founders: Barter & Block - Headless Test Suite ===")
@@ -14,7 +17,20 @@ func _init() -> void:
 	_test_open_trade_flow()
 	_test_full_4bot_simulated_match()
 	_test_main_scene_load()
+	_test_road_work_end_turn()
+	_test_full_bot_match_2p_and_3p()
+	_start_hot_seat_trade_ui()
+	if not _hs_active:
+		_finish_suite()
 
+func _process(_delta: float) -> bool:
+	if _hs_active:
+		_hs_active = false
+		_finish_hot_seat_trade_ui()
+		_finish_suite()
+	return true
+
+func _finish_suite() -> void:
 	print("======================================================")
 	print("Tests Passed: %d | Tests Failed: %d" % [_passed, _failed])
 	if _failed > 0:
@@ -360,6 +376,18 @@ func _test_open_trade_flow() -> void:
 	var cancel_events: Array = res_cancel.get("events", [])
 	_assert(not cancel_events.is_empty() and str(cancel_events[0]).contains("withdrew"), "Cancel event should mention withdrawal")
 
+	state.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 1
+	var res_open_cap: Dictionary = RulesEngine.apply_action(state, 0, GameAction.open_trade(
+		{GameTypes.ResourceType.TIMBER: 1},
+		{GameTypes.ResourceType.GRAIN: 1}
+	))
+	_assert(not bool(res_open_cap.get("ok", false)), "Fourth open trade in one turn must be rejected")
+	_assert(str(res_open_cap.get("error", "")) == "You can post at most 3 offers per turn.", "Offer-cap message should match the contract")
+	_assert(state.open_trades_this_turn == RulesEngine.MAX_OPEN_TRADES_PER_TURN, "open_trades_this_turn should stay at the cap")
+	var res_end_cap: Dictionary = RulesEngine.apply_action(state, 0, GameAction.end_turn())
+	_assert(bool(res_end_cap.get("ok", false)), "end_turn should succeed after the offer was cancelled")
+	_assert(state.open_trades_this_turn == 0, "open_trades_this_turn should reset on end_turn")
+
 	var diff_session := LocalSession.new()
 	var seats: Array[SeatConfig] = []
 	seats.append(SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Human"))
@@ -424,3 +452,132 @@ func _test_main_scene_load() -> void:
 			root.add_child(instance)
 			instance.free()
 			_pass_section("9. Main Scene Load Test (res://scenes/main.tscn instantiated cleanly)")
+
+func _test_road_work_end_turn() -> void:
+	var state := GameState.create_new_game(777, 4, true)
+	state.current_player = 1
+	state.phase = GameTypes.TurnPhase.TURN_ROAD_WORK
+	state.road_work_remaining = 3
+	var res: Dictionary = RulesEngine.apply_action(state, 1, GameAction.end_turn())
+	_assert(bool(res.get("ok", false)), "end_turn must be allowed during TURN_ROAD_WORK")
+	_assert(state.road_work_remaining == 0, "Skipping Road Work should zero road_work_remaining")
+	_assert(state.current_player == 2, "end_turn during Road Work should pass play to the next player")
+	_assert(state.phase == GameTypes.TurnPhase.TURN_ROLL, "Next player should start in TURN_ROLL")
+	_pass_section("10. Road Work Skip Test (end_turn allowed in TURN_ROAD_WORK)")
+
+func _test_full_bot_match_2p_and_3p() -> void:
+	for n in [2, 3]:
+		var session := LocalSession.new()
+		var seats: Array[SeatConfig] = []
+		for i in range(n):
+			var sc := SeatConfig.new()
+			sc.seat_id = i
+			sc.seat_type = SeatConfig.SeatType.AI_MEDIUM
+			sc.display_name = "Bot %d-%d" % [n, i]
+			seats.append(sc)
+		session.start_match(2026 + n, seats, true)
+		var steps := 0
+		var invalid_actions := 0
+		while session.state.phase != GameTypes.TurnPhase.GAME_OVER and steps < 10000:
+			_assert(session.is_ai_to_act(), "%d-bot match: is_ai_to_act() must be true" % n)
+			var res: Dictionary = session.step_ai()
+			if not bool(res.get("ok", false)):
+				invalid_actions += 1
+				printerr("Bot invalid action in %d-player match at step %d: %s" % [n, steps, str(res)])
+				break
+			steps += 1
+		_assert(invalid_actions == 0, "%d-player bot match should have 0 invalid actions" % n)
+		_assert(session.state.phase == GameTypes.TurnPhase.GAME_OVER, "%d-player bot match should reach GAME_OVER (turn %d, steps %d)" % [n, session.state.turn_number, steps])
+		var w: int = session.state.winner
+		_assert(w >= 0 and w < n, "%d-player bot match winner should be a valid seat, got %d" % [n, w])
+	_pass_section("11. Two- and Three-Player Full Bot Match Tests (both reach GAME_OVER with 0 invalid actions)")
+
+func _start_hot_seat_trade_ui() -> void:
+	var packed := ResourceLoader.load("res://scenes/main.tscn") as PackedScene
+	_assert(packed != null, "main.tscn should load for the hot-seat UI test")
+	if packed == null:
+		return
+	_hs_ui = packed.instantiate()
+	root.add_child(_hs_ui)
+	_hs_seats = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.HUMAN, "Coral"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_MEDIUM, "Ember"),
+	]
+	_hs_active = true
+
+func _finish_hot_seat_trade_ui() -> void:
+	var ui: Node = _hs_ui
+	_hs_ui = null
+	if not ui.is_node_ready():
+		_assert(false, "Hot-seat UI should be ready by the first processed frame")
+		ui.free()
+		return
+	ui.auto_ai = false
+	var seats := _hs_seats
+	var reached := false
+	var used_seed := 0
+	for candidate_seed in [424242, 777, 1234, 555, 9090]:
+		ui.session.start_match(candidate_seed, seats, true)
+		var steps := 0
+		while steps < 6000:
+			steps += 1
+			var st: GameState = ui.session.state
+			if st.phase == GameTypes.TurnPhase.GAME_OVER:
+				break
+			if ui.session.is_ai_to_act():
+				ui.session.step_ai()
+				continue
+			var acting: int = ui.session.get_acting_player_id()
+			if (
+				st.phase == GameTypes.TurnPhase.TURN_MAIN
+				and acting == 1
+				and st.open_trade.is_empty()
+				and st.pending_barter.is_empty()
+				and GameTypes.hand_total(st.players[1]["hand"]) >= 1
+			):
+				reached = true
+				used_seed = candidate_seed
+				break
+			var act: Dictionary = BotController.choose_action(st, acting, 2)
+			ui.session.submit_action(acting, act)
+		if reached:
+			break
+	_assert(reached, "Hot-seat match should reach seat 1 TURN_MAIN holding at least one card")
+	if not reached:
+		ui.free()
+		return
+	var st: GameState = ui.session.state
+	_assert(ui.session.get_acting_player_id() == 1, "Seat 1 (the second human) should be the acting player")
+	for r in GameTypes.ALL_RESOURCES:
+		var count_lbl: Label = ui._res_card_refs[r]["count"]
+		_assert(count_lbl.text == "x%d" % int(st.players[1]["hand"].get(r, 0)), "Hand bar should show seat 1's count for resource %d" % r)
+	_assert(bool(ui._hand_view_name.visible) and str(ui._hand_view_name.text) == "Coral", "Hand bar view label should show the viewed seat's name")
+	_assert(str(ui._status_banner_label.text).begins_with("Coral"), "Banner should start with the viewed seat's name")
+	var give_res := -1
+	var get_res := -1
+	for r in GameTypes.ALL_RESOURCES:
+		if int(st.players[1]["hand"].get(r, 0)) >= 1:
+			give_res = r
+			break
+	for r in GameTypes.ALL_RESOURCES:
+		if r != give_res:
+			get_res = r
+			break
+	var res_open: Dictionary = ui.session.submit_action(1, GameAction.open_trade({give_res: 1}, {get_res: 1}))
+	_assert(bool(res_open.get("ok", false)), "Seat 1 should be able to open an offer")
+	var res_decline: Dictionary = ui.session.submit_action(0, GameAction.respond_open_trade("decline"))
+	_assert(bool(res_decline.get("ok", false)), "Seat 0 should be able to decline seat 1's offer")
+	while not ui.session.state.open_trade.is_empty() and ui.session.is_ai_to_act():
+		ui.session.step_ai()
+	_assert(int(ui.session.state.open_trade.get("from", -1)) == 1, "The offer should still belong to seat 1")
+	_assert(ui.session.get_acting_player_id() == 1, "Control should return to seat 1 once everyone has answered")
+	_assert(bool(ui._trade_tray.is_visible_in_tree()), "Tray should have auto-opened for seat 1 without the test opening it")
+	_assert(bool(ui._trade_summary_row.visible), "Seat 1 should see their own open-offer summary row")
+	_assert(bool(ui._trade_withdraw_btn.visible) and not bool(ui._trade_withdraw_btn.disabled), "Withdraw should be visible and enabled for seat 1")
+	_assert(bool(ui._trade_withdraw_btn.is_visible_in_tree()), "Withdraw button should be inside the visible tree")
+	ui._trade_withdraw_btn.pressed.emit()
+	_assert(ui.session.state.open_trade.is_empty(), "Pressing Withdraw should clear the open trade")
+	ui.free()
+	_pass_section("12. Hot-seat Trade UI Test (seed %d: seat 1 offer, answers, withdraw via UI)" % used_seed)

@@ -9,11 +9,6 @@ var turn_number: int = 1
 var winner: int = -1
 
 var setup_anchor_vertex: int = -1
-var setup_Anchor_vertex: int:
-	get:
-		return setup_anchor_vertex
-	set(val):
-		setup_anchor_vertex = val
 
 var tile_terrains: Array[int] = []
 var tile_numbers: Array[int] = []
@@ -197,50 +192,3 @@ func clone() -> GameState:
 	copy.rng = RandomNumberGenerator.new()
 	copy.rng.state = rng.state
 	return copy
-
-func to_player_view(viewer_id: int) -> Dictionary:
-	var sanitized_players: Array = []
-	for p in players:
-		var p_id: int = p["id"]
-		if p_id == viewer_id:
-			sanitized_players.append(p.duplicate(true))
-		else:
-			sanitized_players.append({
-				"id": p_id,
-				"name": p["name"],
-				"hand_count": GameTypes.hand_total(p["hand"]),
-				"dev_card_count": p["dev_cards"].size() + p["new_dev_cards"].size(),
-				"played_guards": p["played_guards"],
-				"played_dev_this_turn": p["played_dev_this_turn"],
-				"settlements_left": p["settlements_left"],
-				"cities_left": p["cities_left"],
-				"roads_left": p["roads_left"],
-				"longest_route_length": p["longest_route_length"],
-				"public_vp": get_victory_points(p_id, false),
-			})
-	return {
-		"seed_val": seed_val,
-		"num_players": num_players,
-		"phase": phase,
-		"current_player": current_player,
-		"turn_number": turn_number,
-		"winner": winner,
-		"setup_anchor_vertex": setup_anchor_vertex,
-		"tile_terrains": tile_terrains.duplicate(),
-		"tile_numbers": tile_numbers.duplicate(),
-		"blocker_tile": blocker_tile,
-		"vertex_ports": vertex_ports.duplicate(),
-		"vertex_owner": vertex_owner.duplicate(),
-		"vertex_building": vertex_building.duplicate(),
-		"edge_owner": edge_owner.duplicate(),
-		"players": sanitized_players,
-		"dev_deck_count": dev_deck.size(),
-		"pending_discards": pending_discards.duplicate(),
-		"pending_barter": pending_barter.duplicate(true),
-		"open_trade": open_trade.duplicate(true),
-		"open_trades_this_turn": open_trades_this_turn,
-		"road_work_remaining": road_work_remaining,
-		"last_dice": last_dice,
-		"longest_route_holder": longest_route_holder,
-		"largest_guard_holder": largest_guard_holder,
-	}

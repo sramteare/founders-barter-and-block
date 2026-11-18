@@ -1,6 +1,8 @@
 class_name RulesEngine
 extends RefCounted
 
+const MAX_OPEN_TRADES_PER_TURN := 3
+
 static func get_valid_settlement_vertices(state: GameState, player_id: int, is_setup: bool) -> Array[int]:
 	var valid: Array[int] = []
 	if player_id < 0 or player_id >= state.num_players:
@@ -583,6 +585,8 @@ static func _handle_open_trade(state: GameState, player_id: int, action: Diction
 		return _fail("Trades can only be opened during the main turn.")
 	if not state.pending_barter.is_empty() or not state.open_trade.is_empty():
 		return _fail("Another trade is already in progress.")
+	if state.open_trades_this_turn >= MAX_OPEN_TRADES_PER_TURN:
+		return _fail("You can post at most %d offers per turn." % MAX_OPEN_TRADES_PER_TURN)
 
 	var terms := _build_trade_terms(
 		action.get("offer", {}),
