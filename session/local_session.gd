@@ -6,6 +6,7 @@ signal action_rejected(player_id: int, error: String)
 
 var state: GameState = null
 var seats: Array[SeatConfig] = []
+var ai_rejected_count: int = 0
 var _ai_steps_in_turn: int = 0
 var _last_tracked_turn: int = -1
 var _last_tracked_player: int = -1
@@ -71,10 +72,6 @@ func get_acting_player_id() -> int:
 			if not responses.has(p_id):
 				return p_id
 		return proposer
-	if not state.pending_barter.is_empty():
-		var target_to: int = int(state.pending_barter.get("to", -1))
-		if target_to >= 0 and target_to < state.num_players:
-			return target_to
 	return state.current_player
 
 func is_ai_to_act() -> bool:
@@ -109,6 +106,7 @@ func step_ai() -> Dictionary:
 	var result: Dictionary = submit_action(acting_id, action)
 
 	if not bool(result.get("ok", false)):
+		ai_rejected_count += 1
 		return _execute_fallback_action(acting_id)
 
 	return result
@@ -140,10 +138,24 @@ func _execute_fallback_action(acting_id: int) -> Dictionary:
 			return submit_action(acting_id, GameAction.cancel_open_trade())
 		return submit_action(acting_id, GameAction.respond_open_trade("decline"))
 
-	if not state.pending_barter.is_empty() and int(state.pending_barter.get("to", -1)) == acting_id:
-		return submit_action(acting_id, GameAction.respond_barter(false))
+	if state.phase == GameTypes.TurnPhase.TURN_DISCARD:
+		var need: int = int(state.pending_discards.get(acting_id, 0))
+		if need > 0:
+			return submit_action(acting_id, GameAction.discard_resources(BotController._choose_discards(state, acting_id, need)))
 
 	match state.phase:
+		GameTypes.TurnPhase.SETUP_SETTLEMENT_1, GameTypes.TurnPhase.SETUP_SETTLEMENT_2:
+			var verts: Array[int] = RulesEngine.get_valid_settlement_vertices(state, acting_id, true)
+			if not verts.is_empty():
+				return submit_action(acting_id, GameAction.place_settlement(verts[0]))
+			return {"ok": false, "error": "AI fallback: no valid setup settlement vertex.", "events": [] as Array[String]}
+		GameTypes.TurnPhase.SETUP_ROAD_1, GameTypes.TurnPhase.SETUP_ROAD_2:
+			var setup_edges: Array[int] = RulesEngine.get_valid_road_edges(state, acting_id, state.setup_anchor_vertex)
+			if setup_edges.is_empty():
+				setup_edges = RulesEngine.get_valid_road_edges(state, acting_id, -1)
+			if not setup_edges.is_empty():
+				return submit_action(acting_id, GameAction.place_road(setup_edges[0]))
+			return {"ok": false, "error": "AI fallback: no valid setup road edge.", "events": [] as Array[String]}
 		GameTypes.TurnPhase.TURN_MAIN:
 			return submit_action(acting_id, GameAction.end_turn())
 		GameTypes.TurnPhase.TURN_ROAD_WORK:

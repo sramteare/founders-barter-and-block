@@ -98,16 +98,11 @@ static func apply_action(state: GameState, player_id: int, action: Dictionary) -
 
 	var action_type: String = str(action.get("type", ""))
 
-	# Out-of-turn actions first: discard_resources and respond_barter
+	# Out-of-turn actions first: discard_resources
 	if state.phase == GameTypes.TurnPhase.TURN_DISCARD:
 		if action_type != "discard_resources":
 			return _fail("Must discard resources first.")
 		return _handle_discard(state, player_id, action, events)
-
-	if not state.pending_barter.is_empty():
-		if action_type == "respond_barter":
-			return _handle_respond_barter(state, player_id, action, events)
-		return _fail("A barter proposal is awaiting response.")
 
 	if not state.open_trade.is_empty():
 		match action_type:
@@ -167,8 +162,6 @@ static func apply_action(state: GameState, player_id: int, action: Dictionary) -
 					return _handle_upgrade_city(state, player_id, action, events)
 				"maritime_trade":
 					return _handle_maritime_trade(state, player_id, action, events)
-				"propose_barter":
-					return _handle_propose_barter(state, player_id, action, events)
 				"open_trade":
 					return _handle_open_trade(state, player_id, action, events)
 				"buy_dev_card":
@@ -506,84 +499,12 @@ static func _handle_maritime_trade(state: GameState, player_id: int, action: Dic
 	])
 	return _ok(events)
 
-static func _handle_propose_barter(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
-	var target_player: int = int(action.get("target_player", -1))
-	if target_player < 0 or target_player >= state.num_players or target_player == player_id:
-		return _fail("Invalid target player for barter.")
-
-	var offer_raw: Dictionary = action.get("offer", {})
-	var request_raw: Dictionary = action.get("request", {})
-	var offer := GameTypes.empty_hand()
-	var request := GameTypes.empty_hand()
-	var p: Dictionary = state.players[player_id]
-	var hand: Dictionary = p["hand"]
-
-	var offer_total := 0
-	var request_total := 0
-	for r in GameTypes.ALL_RESOURCES:
-		var o_amt := int(offer_raw.get(r, 0))
-		var req_amt := int(request_raw.get(r, 0))
-		if o_amt < 0 or req_amt < 0:
-			return _fail("Barter amounts cannot be negative.")
-		if o_amt > int(hand.get(r, 0)):
-			return _fail("Proposer does not have enough %s." % GameTypes.resource_name(r))
-		offer[r] = o_amt
-		request[r] = req_amt
-		offer_total += o_amt
-		request_total += req_amt
-
-	if offer_total == 0 or request_total == 0:
-		return _fail("Barter must offer and request at least 1 resource.")
-
-	state.pending_barter = {
-		"from": player_id,
-		"to": target_player,
-		"offer": offer,
-		"request": request,
-	}
-	events.append("%s proposed a barter to %s." % [p["name"], state.players[target_player]["name"]])
-	return _ok(events)
-
-static func _handle_respond_barter(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
-	var to_player: int = int(state.pending_barter.get("to", -1))
-	var from_player: int = int(state.pending_barter.get("from", -1))
-	if player_id != to_player:
-		return _fail("Only the target player (%d) can respond to this barter." % to_player)
-
-	var accept: bool = bool(action.get("accept", false))
-	var offer: Dictionary = state.pending_barter["offer"]
-	var request: Dictionary = state.pending_barter["request"]
-	var p_from: Dictionary = state.players[from_player]
-	var p_to: Dictionary = state.players[to_player]
-
-	if not accept:
-		state.pending_barter.clear()
-		events.append("%s declined the barter from %s." % [p_to["name"], p_from["name"]])
-		return _ok(events)
-
-	if not _has_resources(p_from["hand"], offer):
-		state.pending_barter.clear()
-		return _fail("Proposer no longer has offered resources.")
-	if not _has_resources(p_to["hand"], request):
-		state.pending_barter.clear()
-		return _fail("Target player does not have the requested resources.")
-
-	for r in GameTypes.ALL_RESOURCES:
-		var o_amt := int(offer.get(r, 0))
-		var req_amt := int(request.get(r, 0))
-		p_from["hand"][r] = int(p_from["hand"].get(r, 0)) - o_amt + req_amt
-		p_to["hand"][r] = int(p_to["hand"].get(r, 0)) - req_amt + o_amt
-
-	state.pending_barter.clear()
-	events.append("%s accepted the barter with %s!" % [p_to["name"], p_from["name"]])
-	return _ok(events)
-
 static func _handle_open_trade(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
 	if player_id != state.current_player:
 		return _fail("Only the current player can open a trade.")
 	if state.phase != GameTypes.TurnPhase.TURN_MAIN:
 		return _fail("Trades can only be opened during the main turn.")
-	if not state.pending_barter.is_empty() or not state.open_trade.is_empty():
+	if not state.open_trade.is_empty():
 		return _fail("Another trade is already in progress.")
 	if state.open_trades_this_turn >= MAX_OPEN_TRADES_PER_TURN:
 		return _fail("You can post at most %d offers per turn." % MAX_OPEN_TRADES_PER_TURN)
@@ -818,14 +739,39 @@ static func _handle_buy_dev_card(state: GameState, player_id: int, events: Array
 	_check_victory(state, events)
 	return _ok(events)
 
-static func _handle_play_guard(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
+static func can_play_dev_card(state: GameState, player_id: int, card_type: int) -> Dictionary:
+	if state.phase == GameTypes.TurnPhase.GAME_OVER:
+		return {"ok": false, "reason": "The game is over."}
+	if state.phase == GameTypes.TurnPhase.TURN_ROLL:
+		if card_type != GameTypes.DevCardType.GUARD:
+			return {"ok": false, "reason": "Only a Guard can be played before rolling."}
+	elif state.phase != GameTypes.TurnPhase.TURN_MAIN:
+		return {"ok": false, "reason": "Action Cards are played during your main turn."}
+	if state.current_player != player_id:
+		return {"ok": false, "reason": "It is not your turn."}
+	if not state.open_trade.is_empty():
+		return {"ok": false, "reason": "An open trade offer is awaiting responses."}
 	var p: Dictionary = state.players[player_id]
-	if bool(p["played_dev_this_turn"]):
-		return _fail("Already played an Action Card this turn.")
+	var dev_cards: Array = p.get("dev_cards", [])
+	var new_dev_cards: Array = p.get("new_dev_cards", [])
+	if not dev_cards.has(card_type):
+		if new_dev_cards.has(card_type):
+			return {"ok": false, "reason": "Bought this turn — playable next turn"}
+		return {"ok": false, "reason": "You do not have this Action Card."}
+	if bool(p.get("played_dev_this_turn", false)):
+		return {"ok": false, "reason": "Already played an Action Card this turn."}
+	if card_type == GameTypes.DevCardType.ROAD_WORK:
+		if int(p.get("roads_left", 0)) <= 0 or get_valid_road_edges(state, player_id, -1).is_empty():
+			return {"ok": false, "reason": "No road can be placed."}
+	return {"ok": true, "reason": ""}
+
+static func _handle_play_guard(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
+	var check := can_play_dev_card(state, player_id, GameTypes.DevCardType.GUARD)
+	if not bool(check["ok"]):
+		return _fail(str(check["reason"]))
+	var p: Dictionary = state.players[player_id]
 	var dev_cards: Array = p["dev_cards"]
 	var idx := dev_cards.find(GameTypes.DevCardType.GUARD)
-	if idx == -1:
-		return _fail("No playable Guard card in hand.")
 
 	var move_res := _execute_blocker_move(state, player_id, action, events)
 	if not move_res["ok"]:
@@ -841,13 +787,12 @@ static func _handle_play_guard(state: GameState, player_id: int, action: Diction
 	return _ok(events)
 
 static func _handle_play_road_work(state: GameState, player_id: int, events: Array[String]) -> Dictionary:
+	var check := can_play_dev_card(state, player_id, GameTypes.DevCardType.ROAD_WORK)
+	if not bool(check["ok"]):
+		return _fail(str(check["reason"]))
 	var p: Dictionary = state.players[player_id]
-	if bool(p["played_dev_this_turn"]):
-		return _fail("Already played an Action Card this turn.")
 	var dev_cards: Array = p["dev_cards"]
 	var idx := dev_cards.find(GameTypes.DevCardType.ROAD_WORK)
-	if idx == -1:
-		return _fail("No playable Road Work card in hand.")
 
 	dev_cards.remove_at(idx)
 	p["played_dev_this_turn"] = true
@@ -860,13 +805,12 @@ static func _handle_play_road_work(state: GameState, player_id: int, events: Arr
 	return _ok(events)
 
 static func _handle_play_harvest_bounty(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
+	var check := can_play_dev_card(state, player_id, GameTypes.DevCardType.HARVEST_BOUNTY)
+	if not bool(check["ok"]):
+		return _fail(str(check["reason"]))
 	var p: Dictionary = state.players[player_id]
-	if bool(p["played_dev_this_turn"]):
-		return _fail("Already played an Action Card this turn.")
 	var dev_cards: Array = p["dev_cards"]
 	var idx := dev_cards.find(GameTypes.DevCardType.HARVEST_BOUNTY)
-	if idx == -1:
-		return _fail("No playable Harvest Bounty card in hand.")
 
 	var res1: int = int(action.get("res1", -1))
 	var res2: int = int(action.get("res2", -1))
@@ -883,13 +827,12 @@ static func _handle_play_harvest_bounty(state: GameState, player_id: int, action
 	return _ok(events)
 
 static func _handle_play_trade_decree(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
+	var check := can_play_dev_card(state, player_id, GameTypes.DevCardType.TRADE_DECREE)
+	if not bool(check["ok"]):
+		return _fail(str(check["reason"]))
 	var p: Dictionary = state.players[player_id]
-	if bool(p["played_dev_this_turn"]):
-		return _fail("Already played an Action Card this turn.")
 	var dev_cards: Array = p["dev_cards"]
 	var idx := dev_cards.find(GameTypes.DevCardType.TRADE_DECREE)
-	if idx == -1:
-		return _fail("No playable Trade Decree card in hand.")
 
 	var res: int = int(action.get("res", -1))
 	if not GameTypes.ALL_RESOURCES.has(res):
@@ -924,7 +867,6 @@ static func _handle_end_turn(state: GameState, player_id: int, events: Array[Str
 	p["new_dev_cards"].clear()
 	p["played_dev_this_turn"] = false
 
-	state.pending_barter.clear()
 	state.open_trade.clear()
 	state.open_trades_this_turn = 0
 	state.road_work_remaining = 0

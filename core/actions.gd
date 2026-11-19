@@ -22,16 +22,6 @@ static func discard_resources(resources: Dictionary) -> Dictionary:
 static func maritime_trade(give_res: int, get_res: int) -> Dictionary:
 	return {"type": "maritime_trade", "give_res": give_res, "get_res": get_res}
 
-static func propose_barter(target_player: int, offer: Dictionary, request: Dictionary) -> Dictionary:
-	return {
-		"type": "propose_barter",
-		"target_player": target_player,
-		"offer": offer.duplicate(),
-		"request": request.duplicate(),
-	}
-
-static func respond_barter(accept: bool) -> Dictionary:
-	return {"type": "respond_barter", "accept": accept}
 
 static func open_trade(offer: Dictionary, request: Dictionary) -> Dictionary:
 	return {

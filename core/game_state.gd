@@ -23,7 +23,6 @@ var players: Array = []
 var dev_deck: Array[int] = []
 
 var pending_discards: Dictionary = {}
-var pending_barter: Dictionary = {}
 var open_trade: Dictionary = {}
 var open_trades_this_turn: int = 0
 var road_work_remaining: int = 0
@@ -181,7 +180,6 @@ func clone() -> GameState:
 
 	copy.dev_deck = dev_deck.duplicate()
 	copy.pending_discards = pending_discards.duplicate()
-	copy.pending_barter = pending_barter.duplicate(true)
 	copy.open_trade = open_trade.duplicate(true)
 	copy.open_trades_this_turn = open_trades_this_turn
 	copy.road_work_remaining = road_work_remaining

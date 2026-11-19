@@ -28,10 +28,25 @@ var _prev_dash_pid: int = -1
 
 # Dice animation tracking
 var _last_seen_dice: Vector2i = Vector2i.ZERO
+var _roll_fx_count: int = 0
+# Sound
+var _sfx: Sfx = null
+var _sfx_prev_current: int = -1
+var _sfx_won: bool = false
 
 # Hot-seat view indicator (hand bar)
 var _hand_view_swatch: ColorRect = null
 var _hand_view_name: Label = null
+
+# Hot-seat device-pass privacy
+var _revealed_pid: int = -1
+var _prev_view_pid: int = -1
+var _device_pass_cover: PanelContainer = null
+var _device_pass_label: Label = null
+var _device_pass_btn: Button = null
+
+# Action buttons that must not be activated by the Space key
+var _no_space_focus_btns: Array = []
 
 # Discard panel
 var _discard_panel: PanelContainer = null
@@ -86,11 +101,13 @@ var _trade_reopen_token: String = ""
 var _trade_last_ot_open: bool = false
 var _trade_view_pid: int = -1
 var _trade_ready_dismissed: bool = false
+var _trade_opened_auto: bool = false
 var _trade_proposer_hint: bool = false
 var _trade_hint_tween: Tween = null
 
 # Context sub-panels (Harvest Bounty, Trade Decree)
 var _subpanel_container: PanelContainer = null
+var _subpanel_owner_pid: int = -1
 
 var _bounty_box: VBoxContainer = null
 var _bounty_res1_opt: OptionButton = null
@@ -129,11 +146,14 @@ var _settings_text_idx: int = 0
 var _settings_speed_idx: int = 1
 var _reduce_motion: bool = false
 
-const SETTINGS_PATH := "user://settings.cfg"
+static var settings_path: String = "user://settings.cfg"
 const TEXT_SCALE_VALUES: Array[float] = [1.0, 1.15, 1.3]
 const BOT_SPEED_VALUES: Array[float] = [0.6, 0.25, 0.08]
 
 func _ready() -> void:
+	_sfx = Sfx.new()
+	_sfx.name = "Sfx"
+	add_child(_sfx)
 	randomize()
 	_load_settings()
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -331,6 +351,7 @@ func _build_ui() -> void:
 	_cancel_pick_btn.tooltip_text = "Cancel the current board selection"
 	_style_button(_cancel_pick_btn, "danger")
 	_cancel_pick_btn.pressed.connect(_cancel_current_pick)
+	_guard_action_button_focus(_cancel_pick_btn)
 	top_vbox.add_child(_cancel_pick_btn)
 
 	# Discard Panel (on a 7 roll when Human has >7 cards)
@@ -491,6 +512,7 @@ func _build_build_card(parent: VBoxContainer) -> void:
 				btn.pressed.connect(_on_upgrade_city_pressed)
 		_apply_build_row_style(btn, false)
 		rows_vbox.add_child(btn)
+		_guard_action_button_focus(btn)
 		_build_rows[key] = {"btn": btn, "marker": marker, "cost": cost, "name": display_name, "labels": row_labels}
 
 func _make_cost_cell(r: int, amt: int) -> HBoxContainer:
@@ -646,6 +668,7 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_trade_btn.tooltip_text = "Open the trade panel (T)"
 	_style_button(_trade_btn, "primary")
 	_trade_btn.pressed.connect(_toggle_trade_tray)
+	_guard_action_button_focus(_trade_btn)
 	hb.add_child(_trade_btn)
 
 	var div := VSeparator.new()
@@ -680,6 +703,7 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 			GameTypes.DevCardType.TRADE_DECREE:
 				chip.pressed.connect(_on_play_decree_pressed)
 		chip.disabled = true
+		_guard_action_button_focus(chip)
 		hb.add_child(chip)
 		_action_chips[ctype] = chip
 
@@ -692,6 +716,7 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_tighten_button_margins(_buy_card_btn, 6)
 	_buy_card_btn.pressed.connect(_on_buy_dev_pressed)
 	_buy_card_btn.disabled = true
+	_guard_action_button_focus(_buy_card_btn)
 	hb.add_child(_buy_card_btn)
 
 	var spacer := Control.new()
@@ -716,7 +741,10 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_style_button(_end_turn_btn, "normal")
 	_end_turn_btn.disabled = true
 	_end_turn_btn.pressed.connect(_on_end_turn_pressed)
+	_guard_action_button_focus(_end_turn_btn)
 	hb.add_child(_end_turn_btn)
+
+	_build_device_pass_cover()
 
 func _build_subpanels(parent: VBoxContainer) -> void:
 	_subpanel_container = _make_card_panel(Palette.PANEL_BG_ALT)
@@ -753,9 +781,17 @@ func _build_subpanels(parent: VBoxContainer) -> void:
 	hb_exec.text = "Claim 2 Resources"
 	_style_button(hb_exec, "primary")
 	hb_exec.pressed.connect(func() -> void:
+		if session == null or session.state == null or not _is_human_acting():
+			return
+		if session.get_acting_player_id() != _subpanel_owner_pid:
+			_subpanel_container.visible = false
+			_bounty_box.visible = false
+			_subpanel_owner_pid = -1
+			return
 		var r1 := _bounty_res1_opt.get_selected_id()
 		var r2 := _bounty_res2_opt.get_selected_id()
 		_subpanel_container.visible = false
+		_subpanel_owner_pid = -1
 		_submit_human_action(GameAction.play_harvest_bounty(r1, r2))
 	)
 	_bounty_box.add_child(hb_exec)
@@ -778,8 +814,16 @@ func _build_subpanels(parent: VBoxContainer) -> void:
 	td_exec.text = "Declare Trade Decree"
 	_style_button(td_exec, "primary")
 	td_exec.pressed.connect(func() -> void:
+		if session == null or session.state == null or not _is_human_acting():
+			return
+		if session.get_acting_player_id() != _subpanel_owner_pid:
+			_subpanel_container.visible = false
+			_decree_box.visible = false
+			_subpanel_owner_pid = -1
+			return
 		var r := _decree_res_opt.get_selected_id()
 		_subpanel_container.visible = false
+		_subpanel_owner_pid = -1
 		_submit_human_action(GameAction.play_trade_decree(r))
 	)
 	_decree_box.add_child(td_exec)
@@ -1178,6 +1222,24 @@ func _build_help_overlay() -> void:
 	close_btn.pressed.connect(func() -> void: _help_overlay.visible = false)
 	vbox.add_child(close_btn)
 
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey):
+		return
+	var k := event as InputEventKey
+	if not k.pressed or k.echo:
+		return
+	if k.keycode != KEY_SPACE:
+		return
+	var fo := get_viewport().gui_get_focus_owner()
+	if fo is LineEdit or _any_overlay_visible():
+		return
+	if _can_roll_now():
+		_on_roll_pressed()
+		get_viewport().set_input_as_handled()
+		return
+	if _no_space_focus_btns.has(fo):
+		get_viewport().set_input_as_handled()
+
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
@@ -1214,6 +1276,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 	if typing or _any_overlay_visible():
 		return
+	if _hand_hidden():
+		return
 
 	match k.keycode:
 		KEY_SPACE, KEY_R:
@@ -1239,12 +1303,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 func _can_roll_now() -> bool:
 	if session == null or session.state == null:
 		return false
+	if _hand_hidden():
+		return false
 	return _is_human_acting() and session.state.phase == GameTypes.TurnPhase.TURN_ROLL
 
 
 func _load_settings() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(SETTINGS_PATH) != OK:
+	if cfg.load(settings_path) != OK:
 		return
 	_settings_ai_difficulty = clampi(int(cfg.get_value("settings", "ai_difficulty", 2)), 1, 3)
 	_settings_muted = bool(cfg.get_value("settings", "muted", false))
@@ -1261,7 +1327,7 @@ func _save_settings() -> void:
 	cfg.set_value("settings", "bot_speed", _settings_speed_idx)
 	cfg.set_value("settings", "reduce_motion", _reduce_motion)
 	cfg.set_value("settings", "auto_ai", auto_ai)
-	cfg.save(SETTINGS_PATH)
+	cfg.save(settings_path)
 
 func _apply_settings() -> void:
 	AudioServer.set_bus_mute(0, _settings_muted)
@@ -1300,11 +1366,13 @@ func _start_match_from_lobby_settings() -> void:
 	_pending_guard_card = false
 	_cancel_build_bubble()
 	_subpanel_container.visible = false
+	_subpanel_owner_pid = -1
 	_trade_tray.visible = false
 	_trade_respond_mode = false
 	_trade_counter_mode = false
 	_trade_reopen_token = ""
 	_trade_last_ot_open = false
+	_trade_opened_auto = false
 	_trade_view_pid = -1
 	_trade_ready_dismissed = false
 	_set_trade_hint(false)
@@ -1312,21 +1380,52 @@ func _start_match_from_lobby_settings() -> void:
 	_last_seen_dice = Vector2i.ZERO
 	_prev_dash_hand = {}
 	_prev_dash_pid = -1
+	_revealed_pid = -1
+	_prev_view_pid = -1
+	_sfx_prev_current = -1
+	_sfx_won = false
 	session.start_match(seed_val, configs, _balanced_check.button_pressed)
 
 func _on_state_updated(state: GameState, events: Array[String]) -> void:
 	_board_view.set_state(state)
+	var rolled_now := false
+	var built_now := false
+	var traded_now := false
 	for ev in events:
 		_append_log(ev)
-		if ev.contains("traded ") or ev.contains("accepted the barter"):
+		if ev.contains("traded "):
+			traded_now = true
 			_board_view.spawn_trade_toast(ev)
+		if ev.contains("rolled "):
+			rolled_now = true
+		if ev.contains(" built a ") or ev.contains("upgraded "):
+			built_now = true
 
-	if state.last_dice != _last_seen_dice:
-		if state.last_dice.x > 0 and state.last_dice.y > 0:
-			_dice_widget.animate_roll(state.last_dice.x, state.last_dice.y)
-			if state.last_dice.x + state.last_dice.y != 7:
-				_spawn_production_popups(state)
-		_last_seen_dice = state.last_dice
+	if rolled_now and state.last_dice.x > 0 and state.last_dice.y > 0:
+		_roll_fx_count += 1
+		_dice_widget.animate_roll(state.last_dice.x, state.last_dice.y)
+		if state.last_dice.x + state.last_dice.y != 7:
+			_spawn_production_popups(state)
+	_last_seen_dice = state.last_dice
+
+	if _sfx != null and session != null:
+		var clip := ""
+		if state.phase == GameTypes.TurnPhase.GAME_OVER:
+			if not _sfx_won:
+				_sfx_won = true
+				clip = "win"
+		elif rolled_now:
+			clip = "seven" if state.last_dice.x + state.last_dice.y == 7 else "roll"
+		elif built_now:
+			clip = "build"
+		elif traded_now:
+			clip = "trade"
+		if clip != "":
+			_sfx.play(clip)
+		var turn_changed := state.current_player != _sfx_prev_current
+		_sfx_prev_current = state.current_player
+		if turn_changed and state.current_player >= 0 and state.current_player < session.seats.size() and not session.seats[state.current_player].is_ai() and state.phase != GameTypes.TurnPhase.GAME_OVER:
+			_sfx.play("turn")
 
 	_refresh_ui()
 
@@ -1400,7 +1499,7 @@ func _set_banner(text: String) -> void:
 		return
 	if _human_seat_count() >= 2:
 		var v := _view_pid()
-		if session != null and session.state != null and v >= 0 and v < session.state.players.size():
+		if session != null and session.state != null and session.state.phase != GameTypes.TurnPhase.GAME_OVER and v >= 0 and v < session.state.players.size():
 			_status_banner_label.text = "%s — %s" % [
 				str(session.state.players[v].get("name", GameTypes.PLAYER_NAMES[v])), text
 			]
@@ -1410,11 +1509,105 @@ func _set_banner(text: String) -> void:
 func _submit_human_action(action: Dictionary) -> void:
 	if session == null or session.state == null:
 		return
+	if _hand_hidden():
+		return
 	var acting_id := session.get_acting_player_id()
 	_pending_guard_card = false
 	_cancel_pick_btn.visible = false
 	_board_view.clear_highlights()
 	session.submit_action(acting_id, action)
+
+# A mouse click on an action button must not leave keyboard focus on it,
+# otherwise the next Space would activate the button instead of rolling.
+func _guard_action_button_focus(btn: Button) -> void:
+	_no_space_focus_btns.append(btn)
+	btn.button_up.connect(func() -> void:
+		btn.release_focus()
+	)
+
+func _build_device_pass_cover() -> void:
+	_device_pass_cover = PanelContainer.new()
+	_device_pass_cover.visible = false
+	var st := StyleBoxFlat.new()
+	st.bg_color = Palette.PANEL_BG
+	st.set_border_width_all(2)
+	st.border_color = Palette.PANEL_BORDER
+	st.set_corner_radius_all(10)
+	st.content_margin_left = 12.0
+	st.content_margin_right = 12.0
+	st.content_margin_top = 8.0
+	st.content_margin_bottom = 8.0
+	_device_pass_cover.add_theme_stylebox_override("panel", st)
+	_hand_bar_panel.add_child(_device_pass_cover)
+
+	var center := CenterContainer.new()
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_device_pass_cover.add_child(center)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	center.add_child(row)
+
+	_device_pass_label = Label.new()
+	_device_pass_label.add_theme_font_size_override("font_size", 16)
+	_device_pass_label.add_theme_color_override("font_color", Palette.HEADING)
+	_device_pass_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(_device_pass_label)
+
+	_device_pass_btn = Button.new()
+	_device_pass_btn.add_theme_font_size_override("font_size", 14)
+	_style_button(_device_pass_btn, "primary")
+	_device_pass_btn.pressed.connect(_on_device_pass_reveal)
+	row.add_child(_device_pass_btn)
+
+func _on_device_pass_reveal() -> void:
+	if session == null or session.state == null:
+		return
+	if not _is_human_acting():
+		return
+	_revealed_pid = session.get_acting_player_id()
+	_refresh_ui()
+
+# With 2+ humans at one device, the hand stays hidden until the acting
+# human confirms the device is in their hands.
+func _hand_hidden() -> bool:
+	if session == null or session.state == null:
+		return false
+	if _human_seat_count() < 2:
+		return false
+	if session.state.phase == GameTypes.TurnPhase.GAME_OVER:
+		return true
+	var cur: int = session.state.current_player
+	var bot_turn: bool = cur >= 0 and cur < session.seats.size() and session.seats[cur].is_ai()
+	if bot_turn and not _is_human_acting():
+		return true
+	return _revealed_pid != _view_pid()
+
+func _update_device_pass_cover(hand_hidden: bool, view_pid: int) -> void:
+	if _device_pass_cover == null:
+		return
+	var game_over := session != null and session.state != null and session.state.phase == GameTypes.TurnPhase.GAME_OVER
+	if not hand_hidden or game_over:
+		_device_pass_cover.visible = false
+		return
+	var human_acting := _is_human_acting()
+	var was_visible := _device_pass_cover.visible
+	var was_btn_visible := _device_pass_btn.visible
+	if human_acting:
+		var pname := str(session.state.players[view_pid].get("name", GameTypes.PLAYER_NAMES[view_pid]))
+		_device_pass_label.text = "Pass the device to %s" % pname
+		_device_pass_btn.text = "I'm %s — show my hand" % pname
+		_device_pass_btn.visible = true
+	else:
+		var cur: int = session.state.current_player
+		var cname: String = GameTypes.PLAYER_NAMES[cur]
+		if cur >= 0 and cur < session.state.players.size():
+			cname = str(session.state.players[cur].get("name", cname))
+		_device_pass_label.text = "%s is playing — hands hidden" % cname
+		_device_pass_btn.visible = false
+	_device_pass_cover.visible = true
+	if human_acting and (not was_visible or not was_btn_visible):
+		_device_pass_btn.grab_focus()
 
 func _compute_instruction(state: GameState, acting_id: int, human_acting: bool) -> String:
 	if state.phase == GameTypes.TurnPhase.GAME_OVER:
@@ -1427,9 +1620,6 @@ func _compute_instruction(state: GameState, acting_id: int, human_acting: bool) 
 			return "Waiting for answers to your offer…"
 	if not human_acting:
 		return "%s is thinking…" % GameTypes.PLAYER_NAMES[acting_id]
-	if not state.pending_barter.is_empty():
-		var from_p: int = int(state.pending_barter.get("from", -1))
-		return "%s offers you a trade — accept or decline." % GameTypes.PLAYER_NAMES[from_p]
 	if not state.open_trade.is_empty():
 		var ot_from: int = int(state.open_trade.get("from", -1))
 		if ot_from != acting_id:
@@ -1465,8 +1655,6 @@ func _blocked_reason(state: GameState, human_acting: bool) -> String:
 		GameTypes.TurnPhase.SETUP_SETTLEMENT_1, GameTypes.TurnPhase.SETUP_ROAD_1, GameTypes.TurnPhase.SETUP_SETTLEMENT_2, GameTypes.TurnPhase.SETUP_ROAD_2:
 			return "Finish setup first"
 		_:
-			if not state.pending_barter.is_empty():
-				return "Answer the incoming barter first"
 			if not state.open_trade.is_empty():
 				return "Resolve the open trade first"
 			return "Finish the current step first"
@@ -1504,6 +1692,14 @@ func _refresh_ui() -> void:
 	# Rebuild compact Scoreboard pill cards
 	var view_pid := _view_pid()
 	var human_seat_n := _human_seat_count()
+	if view_pid != _prev_view_pid:
+		_prev_view_pid = view_pid
+		_revealed_pid = -1
+	var cur_pid: int = state.current_player
+	if not human_acting and cur_pid >= 0 and cur_pid < session.seats.size() and session.seats[cur_pid].is_ai():
+		_revealed_pid = -1
+	var hand_hidden := _hand_hidden()
+	_update_device_pass_cover(hand_hidden, view_pid)
 	for child in _scoreboard_box.get_children():
 		child.queue_free()
 	for p_id in range(state.num_players):
@@ -1564,34 +1760,35 @@ func _refresh_ui() -> void:
 	# Visual bottom hand bar refresh
 	var pid_changed := (dash_pid != _prev_dash_pid)
 	for r in GameTypes.ALL_RESOURCES:
-		var cnt := int(hand.get(r, 0))
 		var refs: Dictionary = _res_card_refs.get(r, {})
 		if refs.is_empty():
 			continue
 		var count_lbl: Label = refs["count"]
 		var card: Control = refs["card"]
+		if hand_hidden:
+			count_lbl.text = "—"
+			card.modulate.a = 0.5
+			continue
+		var cnt := int(hand.get(r, 0))
 		count_lbl.text = "x%d" % cnt
 		card.modulate.a = 1.0 if cnt > 0 else 0.45
 		if not pid_changed and cnt > int(_prev_dash_hand.get(r, 0)):
 			_pulse_card(card)
-	_prev_dash_hand = hand.duplicate()
+	_prev_dash_hand = {} if hand_hidden else hand.duplicate()
 	_prev_dash_pid = dash_pid
 
 	var show_view := human_seat_n >= 2
 	if _hand_view_swatch != null:
-		_hand_view_swatch.visible = show_view
+		_hand_view_swatch.visible = show_view and not hand_hidden
 		_hand_view_swatch.color = GameTypes.PLAYER_COLORS[dash_pid]
 	if _hand_view_name != null:
 		_hand_view_name.visible = show_view
-		_hand_view_name.text = str(dash_player.get("name", GameTypes.PLAYER_NAMES[dash_pid]))
+		if hand_hidden:
+			_hand_view_name.text = "Hand hidden"
+		else:
+			_hand_view_name.text = str(dash_player.get("name", GameTypes.PLAYER_NAMES[dash_pid]))
 
 	# Action card chips refresh
-	var can_play_dev := (
-		human_acting
-		and state.open_trade.is_empty()
-		and (state.phase == GameTypes.TurnPhase.TURN_MAIN or state.phase == GameTypes.TurnPhase.TURN_ROLL)
-		and not bool(dash_player.get("played_dev_this_turn", false))
-	)
 	var all_cards: Array = []
 	all_cards.append_array(dash_player.get("dev_cards", []))
 	all_cards.append_array(dash_player.get("new_dev_cards", []))
@@ -1617,18 +1814,36 @@ func _refresh_ui() -> void:
 		if chip == null:
 			continue
 		var ccnt: int = int(card_counts.get(ctype, 0))
-		chip.text = "%s x%d" % [chip_names[ctype], ccnt]
-		match ctype:
-			GameTypes.DevCardType.GUARD:
-				chip.disabled = not (can_play_dev and ccnt > 0)
-			GameTypes.DevCardType.ROAD_WORK:
-				chip.disabled = not (human_acting and state.phase == GameTypes.TurnPhase.TURN_MAIN and can_play_dev and ccnt > 0)
-			GameTypes.DevCardType.HARVEST_BOUNTY:
-				chip.disabled = not (human_acting and state.phase == GameTypes.TurnPhase.TURN_MAIN and can_play_dev and ccnt > 0)
-			GameTypes.DevCardType.TRADE_DECREE:
-				chip.disabled = not (human_acting and state.phase == GameTypes.TurnPhase.TURN_MAIN and can_play_dev and ccnt > 0)
-			_:
-				chip.disabled = true
+		var chip_label := "%s x%d" % [chip_names[ctype], ccnt]
+		if ctype == GameTypes.DevCardType.CHARTER_POINT:
+			chip.text = chip_label
+			chip.disabled = true
+			chip.tooltip_text = "Charter Point: a hidden victory point — never playable"
+			continue
+		if ccnt <= 0:
+			chip.text = chip_label
+			chip.disabled = true
+			chip.tooltip_text = "You have no %s card" % str(chip_names[ctype])
+			continue
+		var new_cnt := 0
+		for c in dash_player.get("new_dev_cards", []):
+			if int(c) == int(ctype):
+				new_cnt += 1
+		var chk: Dictionary = RulesEngine.can_play_dev_card(state, dash_pid, int(ctype))
+		var chk_ok := bool(chk.get("ok", false))
+		if new_cnt > 0:
+			chip_label += " (new)"
+		chip.text = chip_label
+		chip.disabled = not chk_ok
+		chip.tooltip_text = "Play %s" % str(chip_names[ctype]) if chk_ok else str(chk.get("reason", ""))
+	if hand_hidden:
+		for ctype in _action_chips.keys():
+			var hidden_chip: Button = _action_chips[ctype]
+			hidden_chip.disabled = true
+			hidden_chip.text = "Hidden"
+			hidden_chip.tooltip_text = ""
+
+	_refresh_subpanels(state, acting_id, human_acting)
 
 	# Discard check
 	var needs_discard := (
@@ -1648,7 +1863,6 @@ func _refresh_ui() -> void:
 	var in_main := (
 		human_acting
 		and state.phase == GameTypes.TurnPhase.TURN_MAIN
-		and state.pending_barter.is_empty()
 		and state.open_trade.is_empty()
 	)
 	var in_roll := (human_acting and state.phase == GameTypes.TurnPhase.TURN_ROLL)
@@ -1929,6 +2143,7 @@ func _build_build_bubble() -> void:
 	_build_bubble_build_btn.add_theme_font_size_override("font_size", 13)
 	_style_button(_build_bubble_build_btn, "primary")
 	_build_bubble_build_btn.pressed.connect(_on_bubble_build_pressed)
+	_guard_action_button_focus(_build_bubble_build_btn)
 	row.add_child(_build_bubble_build_btn)
 	_build_bubble_cancel_btn = Button.new()
 	_build_bubble_cancel_btn.text = "✕"
@@ -2014,7 +2229,7 @@ func _on_bubble_build_pressed() -> void:
 
 # Board click handlers
 func _on_board_vertex_clicked(vertex_id: int) -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	var mode := _board_view.interaction_mode
 	if mode == BoardView.InteractionMode.PICK_SETTLEMENT:
@@ -2023,13 +2238,13 @@ func _on_board_vertex_clicked(vertex_id: int) -> void:
 		_submit_human_action(GameAction.upgrade_city(vertex_id))
 
 func _on_board_edge_clicked(edge_id: int) -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	if _board_view.interaction_mode == BoardView.InteractionMode.PICK_ROAD:
 		_submit_human_action(GameAction.place_road(edge_id))
 
 func _on_board_tile_clicked(tile_id: int) -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	if _board_view.interaction_mode == BoardView.InteractionMode.PICK_BLOCKER_TILE:
 		var acting_id := session.get_acting_player_id()
@@ -2062,7 +2277,7 @@ func _on_end_turn_pressed() -> void:
 	_submit_human_action(GameAction.end_turn())
 
 func _on_build_road_pressed() -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	var acting_id := session.get_acting_player_id()
 	var edges := RulesEngine.get_valid_road_edges(session.state, acting_id, -1)
@@ -2071,7 +2286,7 @@ func _on_build_road_pressed() -> void:
 	_set_banner("Select a highlighted edge on the board to build a Road.")
 
 func _on_build_settlement_pressed() -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	var acting_id := session.get_acting_player_id()
 	var verts := RulesEngine.get_valid_settlement_vertices(session.state, acting_id, false)
@@ -2080,7 +2295,7 @@ func _on_build_settlement_pressed() -> void:
 	_set_banner("Select a highlighted vertex on the board to build a Settlement.")
 
 func _on_upgrade_city_pressed() -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	var acting_id := session.get_acting_player_id()
 	var verts := RulesEngine.get_valid_city_vertices(session.state, acting_id)
@@ -2092,7 +2307,7 @@ func _on_buy_dev_pressed() -> void:
 	_submit_human_action(GameAction.buy_dev_card())
 
 func _on_play_guard_pressed() -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	_pending_guard_card = true
 	var tiles: Array[int] = []
@@ -2113,7 +2328,7 @@ func _on_play_decree_pressed() -> void:
 	_on_toggle_decree_panel()
 
 func _on_auto_discard_pressed() -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	var acting_id := session.get_acting_player_id()
 	var req_cnt: int = int(session.state.pending_discards.get(acting_id, 0))
@@ -2235,7 +2450,7 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_ask_group = VBoxContainer.new()
 	_trade_ask_group.add_theme_constant_override("separation", 4)
 	_trade_side_col.add_child(_trade_ask_group)
-	_trade_ask_btn = _make_tray_button("Ask players", "primary", "Post this offer to every other player (and the bank)")
+	_trade_ask_btn = _make_tray_button("Ask players", "primary", "Post this offer to every other player")
 	_trade_ask_btn.custom_minimum_size = Vector2(118, 34)
 	_trade_ask_btn.pressed.connect(_on_ask_players_pressed)
 	_trade_ask_group.add_child(_trade_ask_btn)
@@ -2442,8 +2657,6 @@ func _trade_allowed_now() -> bool:
 	var st := session.state
 	if st.phase == GameTypes.TurnPhase.GAME_OVER or not _is_human_acting():
 		return false
-	if not st.pending_barter.is_empty():
-		return false
 	if st.phase == GameTypes.TurnPhase.TURN_MAIN:
 		return true
 	if not st.open_trade.is_empty():
@@ -2453,6 +2666,8 @@ func _trade_allowed_now() -> bool:
 func _toggle_trade_tray() -> void:
 	if _trade_tray == null:
 		return
+	if _hand_hidden():
+		return
 	if _trade_tray.visible:
 		_close_trade_tray_by_user()
 		return
@@ -2460,6 +2675,7 @@ func _toggle_trade_tray() -> void:
 		return
 	_cancel_build_bubble()
 	_trade_tray.visible = true
+	_trade_opened_auto = false
 	_trade_reopen_token = ""
 	_trade_ready_dismissed = false
 	_set_trade_hint(false)
@@ -2514,8 +2730,9 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 		_trade_reopen_token = ""
 		_trade_ready_dismissed = false
 		_set_trade_hint(false)
-		if _trade_respond_mode and _trade_tray.visible:
+		if _trade_opened_auto and _trade_tray.visible:
 			_trade_tray.visible = false
+		_trade_opened_auto = false
 	_trade_last_ot_open = ot_open
 	var from_p := int(ot.get("from", -1))
 	var my_pid := _view_pid()
@@ -2552,7 +2769,10 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 				_set_trade_hint(false)
 				_trade_tray.visible = true
 		elif _trade_reopen_token != _ot_dismiss_key(ot, my_pid):
+			var was_tray_open := _trade_tray.visible
 			_trade_tray.visible = true
+			if respond and not was_tray_open:
+				_trade_opened_auto = true
 
 	var counter := respond and _trade_counter_mode
 	var propose_idle := (not respond) and (not from_me_show)
@@ -2587,7 +2807,6 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 	var propose_ok := (
 		human_acting
 		and state.phase == GameTypes.TurnPhase.TURN_MAIN
-		and state.pending_barter.is_empty()
 		and not ot_open
 	)
 	var unlocked := propose_ok or counter
@@ -2612,7 +2831,7 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 	if propose_ok and offer_cap_hit:
 		_trade_ask_btn.tooltip_text = "You can post at most %d offers per turn." % RulesEngine.MAX_OPEN_TRADES_PER_TURN
 	else:
-		_trade_ask_btn.tooltip_text = "Post this offer to every other player (and the bank)"
+		_trade_ask_btn.tooltip_text = "Post this offer to every other player"
 	_trade_withdraw_btn.disabled = not from_me
 	_trade_clear_btn.disabled = (give_total == 0 and get_total == 0) or not unlocked
 	_ot_send_btn.visible = counter
@@ -2628,6 +2847,8 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 			_ot_accept_btn.tooltip_text = "Accept this offer"
 
 	_rebuild_partner_cards(state, ot, ot_open, from_me, not ot_open)
+	if _hand_hidden():
+		_trade_tray.visible = false
 	if _trade_tray.visible:
 		_update_tray_min_height()
 
@@ -2669,7 +2890,7 @@ func _rebuild_partner_cards(state: GameState, ot: Dictionary, ot_open: bool, hum
 		_add_card_status(bank_card, hint, Palette.ACCENT_GREEN.darkened(0.25) if not bank_sel.is_empty() else Palette.TEXT_MUTED, 12)
 		bank_lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_trade_bank_btn = _make_card_trade_button("Give %s: %s" % [hint, ratio_text])
-		var bank_ok := _is_human_acting() and state.phase == GameTypes.TurnPhase.TURN_MAIN and state.pending_barter.is_empty() and state.open_trade.is_empty()
+		var bank_ok := _is_human_acting() and state.phase == GameTypes.TurnPhase.TURN_MAIN and state.open_trade.is_empty()
 		_trade_bank_btn.visible = not bank_sel.is_empty()
 		_trade_bank_btn.disabled = bank_sel.is_empty() or not bank_ok
 		if not bank_sel.is_empty():
@@ -2877,11 +3098,12 @@ func _on_counter_back_pressed() -> void:
 func _on_resource_card_pressed(res: int) -> void:
 	if session == null or session.state == null:
 		return
+	if _hand_hidden():
+		return
 	var st := session.state
 	if not (
 		_is_human_acting()
 		and st.phase == GameTypes.TurnPhase.TURN_MAIN
-		and st.pending_barter.is_empty()
 		and st.open_trade.is_empty()
 	):
 		return
@@ -2889,6 +3111,7 @@ func _on_resource_card_pressed(res: int) -> void:
 		return
 	if not _trade_tray.visible:
 		_trade_tray.visible = true
+		_trade_opened_auto = false
 		_trade_reopen_token = ""
 	_adjust_trade_count(true, res, 1)
 
@@ -2930,20 +3153,47 @@ func _cancel_current_pick() -> void:
 
 
 func _on_toggle_bounty_panel() -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	var was_vis := _subpanel_container.visible and _bounty_box.visible
 	_hide_all_subpanels()
 	_bounty_box.visible = not was_vis
 	_subpanel_container.visible = not was_vis
+	_subpanel_owner_pid = session.get_acting_player_id() if not was_vis else -1
 
 func _on_toggle_decree_panel() -> void:
-	if not _is_human_acting():
+	if not _is_human_acting() or _hand_hidden():
 		return
 	var was_vis := _subpanel_container.visible and _decree_box.visible
 	_hide_all_subpanels()
 	_decree_box.visible = not was_vis
 	_subpanel_container.visible = not was_vis
+	_subpanel_owner_pid = session.get_acting_player_id() if not was_vis else -1
+
+# Hide Bounty/Decree panels whenever the viewed human can no longer play
+# that card; submittals are only honoured for the player who opened them.
+func _refresh_subpanels(state: GameState, acting_id: int, human_acting: bool) -> void:
+	if _subpanel_container == null or not _subpanel_container.visible:
+		return
+	if _bounty_box.visible:
+		var bounty_ok := (
+			human_acting
+			and acting_id == _subpanel_owner_pid
+			and bool(RulesEngine.can_play_dev_card(state, acting_id, GameTypes.DevCardType.HARVEST_BOUNTY).get("ok", false))
+		)
+		if not bounty_ok:
+			_bounty_box.visible = false
+	if _decree_box.visible:
+		var decree_ok := (
+			human_acting
+			and acting_id == _subpanel_owner_pid
+			and bool(RulesEngine.can_play_dev_card(state, acting_id, GameTypes.DevCardType.TRADE_DECREE).get("ok", false))
+		)
+		if not decree_ok:
+			_decree_box.visible = false
+	if not _bounty_box.visible and not _decree_box.visible:
+		_subpanel_container.visible = false
+		_subpanel_owner_pid = -1
 
 # Helpers
 func _find_first_human_seat() -> int:
@@ -3303,6 +3553,7 @@ class DicePairWidget extends Control:
 			var mb := event as InputEventMouseButton
 			if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
 				accept_event()
+				release_focus()
 				pressed.emit()
 		elif event is InputEventKey:
 			var k := event as InputEventKey
