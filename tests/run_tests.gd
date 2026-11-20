@@ -5,6 +5,7 @@ var _failed: int = 0
 
 const UI_SCRIPT_PATH := "res://scripts/main_ui.gd"
 const TEST_SETTINGS_PATH := "user://test_settings.cfg"
+const NO_EVENTS: Array[String] = []
 var _ui_queue: Array[Callable] = []
 var _pending_ui: Node = null
 var _pending_body: Callable = Callable()
@@ -776,6 +777,38 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
 	], _test_steal_hold_deadline_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_bank_pile_counts_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_card_click_trade_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_trade_close_cross_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_card_redraw_setters_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_flights_production_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_flights_build_trade_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_flight_layer_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_tray_bar_fit_body)
 	_queue_ui_test([
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
@@ -1774,6 +1807,290 @@ func _test_steal_hold_deadline_body(ui: Node) -> void:
 	_assert(ui._res_hold.is_empty(), "The deadline tick clears the hand-card holds too")
 	_assert(ui._displayed_hand_count(1) == GameTypes.hand_total(st.players[1]["hand"]), "Displayed counts snap back to the real totals after the deadline")
 	_pass_section("56. Steal Hold Deadline Test (a stuck animation cannot keep holds past its tick)")
+
+func _numeric_label_count(node: Node) -> int:
+	var n := 0
+	for c in node.get_children():
+		if c is Label:
+			var t := (c as Label).text.strip_edges()
+			if t.is_valid_int() or t == "empty":
+				n += 1
+		n += _numeric_label_count(c)
+	return n
+
+
+func _click_card(ui: Node, ctrl: Control) -> void:
+	var root := ui.get_tree().root
+	var center := root.get_screen_transform() * (ctrl.get_global_transform() * (ctrl.size * 0.5))
+	var press_ev := InputEventMouseButton.new()
+	press_ev.button_index = MOUSE_BUTTON_LEFT
+	press_ev.pressed = true
+	press_ev.position = center
+	press_ev.global_position = center
+	root.push_input(press_ev)
+	var release_ev := InputEventMouseButton.new()
+	release_ev.button_index = MOUSE_BUTTON_LEFT
+	release_ev.pressed = false
+	release_ev.position = center
+	release_ev.global_position = center
+	root.push_input(release_ev)
+
+func _test_bank_pile_counts_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(778000, seats, true)
+	ui._refresh_ui()
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	var ok := true
+	for r in GameTypes.ALL_RESOURCES:
+		var bf: CardFace = ui._bank_faces[r]
+		if int(bf.pile_count) != int(st.bank.get(r, 0)):
+			ok = false
+	_assert(ok, "Every bank pile shows the real card count as pile edges")
+	_assert(int(ui._bank_deck_face.pile_count) == st.dev_deck.size(), "The deck pile mirrors the deck size")
+	st.bank[GameTypes.ResourceType.FLEECE] = int(st.bank[GameTypes.ResourceType.FLEECE]) - 1
+	var fleece_cnt := int(st.bank[GameTypes.ResourceType.FLEECE])
+	ui._refresh_ui()
+	var wface: CardFace = ui._bank_faces[GameTypes.ResourceType.FLEECE]
+	_assert(int(wface.pile_count) == fleece_cnt, "Taking one card removes one edge line")
+	_assert(wface.tooltip_text.contains(str(fleece_cnt)), "The hover tooltip keeps the exact number")
+	_assert(ui._bank_deck_face.tooltip_text.begins_with("Action Cards left: ") and ui._bank_deck_face.tooltip_text.contains(str(st.dev_deck.size())), "The deck tooltip shows the exact deck count")
+	var row_ok := true
+	for r in GameTypes.ALL_RESOURCES:
+		var bf2: CardFace = ui._bank_faces[r]
+		if _numeric_label_count(bf2.get_parent().get_parent()) != 0:
+			row_ok = false
+	_assert(row_ok, "No plain number label is left in the bank row")
+	_pass_section("57. Bank Pile Edges Test (one edge per card, exact count on hover, no numbers)")
+
+func _test_card_click_trade_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(778001, seats, true)
+	var grain := GameTypes.ResourceType.GRAIN
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.players[0]["hand"] = {grain: 2}
+	ui._trade_tray.visible = false
+	ui._reset_trade_counts()
+	ui._refresh_ui()
+	_ui_queue.push_front(func() -> void:
+		var face: CardFace = ui._res_card_refs[grain]
+		_assert(face.size.x > 0.0, "The grain hand card has a real size before clicking")
+		_assert(face.tooltip_text == "Click to offer in a trade", "A tradeable card invites the click: %s" % face.tooltip_text)
+		_click_card(ui, face)
+		_assert(bool(ui._trade_tray.visible), "Clicking a hand card opens the trade tray")
+		_assert(int(ui._trade_give_counts.get(grain, 0)) == 1, "The clicked card goes onto the give side")
+		_click_card(ui, face)
+		_assert(int(ui._trade_give_counts.get(grain, 0)) == 2, "A second click offers a second grain")
+		_click_card(ui, face)
+		_assert(int(ui._trade_give_counts.get(grain, 0)) == 2, "The give side never exceeds the hand")
+		ui._close_trade_tray_by_user()
+		ui._refresh_ui()
+		_assert(not bool(ui._trade_tray.visible), "Closing the tray works")
+		st.phase = GameTypes.TurnPhase.TURN_ROLL
+		ui._refresh_ui()
+		_assert(face.tooltip_text == "Roll first", "Before rolling the tooltip says why: %s" % face.tooltip_text)
+		_click_card(ui, face)
+		_assert(not bool(ui._trade_tray.visible), "A click before rolling does not open the tray")
+		st.phase = GameTypes.TurnPhase.TURN_DISCARD
+		st.pending_discards[0] = 2
+		ui._refresh_ui()
+		_ui_queue.push_front(func() -> void:
+			_click_card(ui, face)
+			_assert(int(ui._discard_pick.get(grain, 0)) == 1, "In discard mode a click still picks a discard")
+			_assert(not bool(ui._trade_tray.visible), "Discard mode clicks never open the trade tray")
+			_pass_section("58. Card Click Trade Test (clicking a hand card opens the tray and offers it)")
+		)
+	)
+
+
+func _test_trade_close_cross_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(778002, seats, true)
+	await ui.get_tree().process_frame
+	ui._refresh_ui()
+	_assert(ui._trade_close_btn.text == "✕", "The close button is just a cross, got %s" % ui._trade_close_btn.text)
+	_assert(ui._trade_close_btn.tooltip_text.contains("Esc"), "The close tooltip still explains Esc")
+	_assert(ui._trade_close_btn.custom_minimum_size == Vector2(28, 28), "The close button is a small square")
+	_pass_section("59. Trade Close Cross Test (cross-only close button keeps its tooltip)")
+func _test_card_redraw_setters_body(ui: Node) -> void:
+	var f := CardFace.new()
+	ui.add_child(f)
+	await ui.get_tree().process_frame
+	var n0: int = f.redraw_requests
+	f.count = 3
+	_assert(f.redraw_requests == n0 + 1, "A changed count asks for a redraw")
+	f.count = 3
+	_assert(f.redraw_requests == n0 + 1, "Re-setting the same count does not redraw")
+	f.badge = 2
+	f.badge = 2
+	f.selected = true
+	f.selected = true
+	f.disabled = true
+	f.disabled = true
+	f.hidden_card = true
+	f.hidden_card = true
+	f.kind = "back"
+	f.kind = "back"
+	f.resource = 4
+	f.resource = 4
+	f.action = 1
+	f.action = 1
+	f.stack_depth = 2
+	f.stack_depth = 2
+	f.pile_low_tint = true
+	f.pile_low_tint = true
+	f.pile_count = 3
+	f.pile_count = 3
+	_assert(f.redraw_requests == n0 + 11, "Every visual property redraws once on change only, got %d new" % (f.redraw_requests - n0))
+	f.count = 0
+	_assert(int(f.count) == 0, "Count still stores through the setter")
+	f.free()
+	_pass_section("60. CardFace Redraw Setters Test (count and friends repaint when they change)")
+
+
+func _flight_has(list: Array, from_id: int, to_id: int, res: int, n: int) -> bool:
+	for tr in list:
+		if int(tr["from"]) == from_id and int(tr["to"]) == to_id and int(tr["res"]) == res and int(tr["n"]) == n:
+			return true
+	return false
+
+
+func _flight_touches(list: Array, pid: int) -> bool:
+	for tr in list:
+		if int(tr["from"]) == pid or int(tr["to"]) == pid:
+			return true
+	return false
+
+func _test_flights_production_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(779001, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	_assert(ui._last_flights.is_empty(), "The first update of a new match records no flights")
+	var p0h: Dictionary = st.players[0]["hand"]
+	var p1h: Dictionary = st.players[1]["hand"]
+	p1h[GameTypes.ResourceType.GRAIN] = int(p1h.get(GameTypes.ResourceType.GRAIN, 0)) + 2
+	st.bank[GameTypes.ResourceType.GRAIN] = int(st.bank[GameTypes.ResourceType.GRAIN]) - 2
+	ui._on_state_updated(st, NO_EVENTS)
+	_assert(_flight_has(ui._last_flights, -1, 1, GameTypes.ResourceType.GRAIN, 2), "Production: two Grain fly from the bank to player 1")
+	p0h[GameTypes.ResourceType.TIMBER] = int(p0h.get(GameTypes.ResourceType.TIMBER, 0)) - 4
+	st.bank[GameTypes.ResourceType.TIMBER] = int(st.bank.get(GameTypes.ResourceType.TIMBER, 0)) + 4
+	p0h[GameTypes.ResourceType.GRAIN] = int(p0h.get(GameTypes.ResourceType.GRAIN, 0)) + 1
+	st.bank[GameTypes.ResourceType.GRAIN] = int(st.bank.get(GameTypes.ResourceType.GRAIN, 0)) - 1
+	ui._on_state_updated(st, NO_EVENTS)
+	_assert(_flight_has(ui._last_flights, 0, -1, GameTypes.ResourceType.TIMBER, 4), "Bank trade: four Timber fly to the bank")
+	_assert(_flight_has(ui._last_flights, -1, 0, GameTypes.ResourceType.GRAIN, 1), "Bank trade: one Grain flies back to the player")
+	p0h[GameTypes.ResourceType.FLEECE] = int(p0h.get(GameTypes.ResourceType.FLEECE, 0)) + 1
+	st.bank[GameTypes.ResourceType.FLEECE] = int(st.bank.get(GameTypes.ResourceType.FLEECE, 0)) - 1
+	ui._on_state_updated(st, NO_EVENTS)
+	p0h[GameTypes.ResourceType.FLEECE] = int(p0h[GameTypes.ResourceType.FLEECE]) - 1
+	p1h[GameTypes.ResourceType.FLEECE] = int(p1h.get(GameTypes.ResourceType.FLEECE, 0)) + 1
+	st.last_steal = {"serial": 777001, "thief": 1, "victim": 0, "res": GameTypes.ResourceType.FLEECE}
+	ui._on_state_updated(st, NO_EVENTS)
+	_assert(not _flight_has(ui._last_flights, 0, 1, GameTypes.ResourceType.FLEECE, 1), "A steal never lands in the general flight list")
+	_pass_section("61. General Flights Test (production, bank trade and the steal exclusion)")
+
+func _test_flights_build_trade_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(779002, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	var p0h: Dictionary = st.players[0]["hand"]
+	var p1h: Dictionary = st.players[1]["hand"]
+	for r in [GameTypes.ResourceType.TIMBER, GameTypes.ResourceType.CLAY, GameTypes.ResourceType.GRAIN]:
+		p0h[r] = int(p0h.get(r, 0)) + 2
+		st.bank[r] = int(st.bank.get(r, 0)) - 2
+	p1h[GameTypes.ResourceType.FLEECE] = int(p1h.get(GameTypes.ResourceType.FLEECE, 0)) + 1
+	st.bank[GameTypes.ResourceType.FLEECE] = int(st.bank.get(GameTypes.ResourceType.FLEECE, 0)) - 1
+	ui._on_state_updated(st, NO_EVENTS)
+	p0h[GameTypes.ResourceType.TIMBER] = int(p0h[GameTypes.ResourceType.TIMBER]) - 1
+	p0h[GameTypes.ResourceType.CLAY] = int(p0h[GameTypes.ResourceType.CLAY]) - 1
+	st.bank[GameTypes.ResourceType.TIMBER] = int(st.bank.get(GameTypes.ResourceType.TIMBER, 0)) + 1
+	st.bank[GameTypes.ResourceType.CLAY] = int(st.bank.get(GameTypes.ResourceType.CLAY, 0)) + 1
+	ui._on_state_updated(st, NO_EVENTS)
+	_assert(_flight_has(ui._last_flights, 0, -1, GameTypes.ResourceType.TIMBER, 1), "A road build flies one Timber to the bank")
+	_assert(_flight_has(ui._last_flights, 0, -1, GameTypes.ResourceType.CLAY, 1), "A road build flies one Clay to the bank")
+	p0h[GameTypes.ResourceType.GRAIN] = int(p0h[GameTypes.ResourceType.GRAIN]) - 1
+	p1h[GameTypes.ResourceType.GRAIN] = int(p1h.get(GameTypes.ResourceType.GRAIN, 0)) + 1
+	p1h[GameTypes.ResourceType.FLEECE] = int(p1h[GameTypes.ResourceType.FLEECE]) - 1
+	p0h[GameTypes.ResourceType.FLEECE] = int(p0h.get(GameTypes.ResourceType.FLEECE, 0)) + 1
+	ui._on_state_updated(st, NO_EVENTS)
+	_assert(_flight_has(ui._last_flights, 0, 1, GameTypes.ResourceType.GRAIN, 1), "A player trade flies the given Grain A to B")
+	_assert(_flight_has(ui._last_flights, 1, 0, GameTypes.ResourceType.FLEECE, 1), "A player trade flies the returned Fleece B to A")
+	var bank_free := true
+	for tr in ui._last_flights:
+		if int(tr["from"]) == -1 or int(tr["to"]) == -1:
+			bank_free = false
+	_assert(bank_free, "A player trade involves no bank flight")
+	_pass_section("62. Build and Player Trade Flights Test (player to bank builds, A to B trades)")
+
+func _test_flight_layer_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(779003, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	_assert(ui._flight_layer != null and is_instance_valid(ui._flight_layer), "The flight layer exists")
+	ui._reduce_motion = true
+	var p1h: Dictionary = st.players[1]["hand"]
+	p1h[GameTypes.ResourceType.GRAIN] = int(p1h.get(GameTypes.ResourceType.GRAIN, 0)) + 2
+	st.bank[GameTypes.ResourceType.GRAIN] = int(st.bank.get(GameTypes.ResourceType.GRAIN, 0)) - 2
+	ui._on_state_updated(st, NO_EVENTS)
+	_assert(not ui._last_flights.is_empty(), "Reduce motion still records the transfers")
+	_assert(_flight_has(ui._last_flights, -1, 1, GameTypes.ResourceType.GRAIN, 2), "Reduce motion keeps the transfer data")
+	_assert(int(ui._flight_layer.get_child_count()) == 0, "Reduce motion spawns no flyers")
+	ui._reduce_motion = false
+	var p0h: Dictionary = st.players[0]["hand"]
+	p0h[GameTypes.ResourceType.CLAY] = int(p0h.get(GameTypes.ResourceType.CLAY, 0)) + 1
+	st.bank[GameTypes.ResourceType.CLAY] = int(st.bank.get(GameTypes.ResourceType.CLAY, 0)) - 1
+	ui._on_state_updated(st, NO_EVENTS)
+	_assert(int(ui._flight_layer.get_child_count()) >= 1, "A bank flight to the viewer puts a flyer on the layer")
+	ui._start_match_from_lobby_settings()
+	await ui.get_tree().process_frame
+	_assert(int(ui._flight_layer.get_child_count()) == 0, "A new game clears every flyer")
+	_assert(ui._last_flights.is_empty(), "A new game resets the recorded flights")
+	_pass_section("63. Flight Layer Test (reduce motion records only; new game frees flyers)")
+
+func _test_tray_bar_fit_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	root.size = Vector2i(1280, 800)
+	ui.session.start_match(779004, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	ui._toggle_trade_tray()
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	_assert(bool(ui._trade_tray.visible), "The trade tray is open in propose mode")
+	var bar_end := float(ui._hand_bar_panel.get_global_rect().end.y)
+	_assert(bar_end <= 800.5, "The hand bar stays inside a 1280x800 window with the tray open, got bottom %.1f" % bar_end)
+	root.size = Vector2i(64, 64)
+	_pass_section("64. Tray Bar Fit Test (the bottom bar stays in the window with the tray open)")
 func _test_sfx_body(ui: Node) -> void:
 	var sfx: Node = ui.get_node_or_null("Sfx")
 	_assert(sfx != null, "UI should own an Sfx child")
@@ -2704,27 +3021,30 @@ func _test_bank_stacks_body(ui: Node) -> void:
 	var ok := true
 	for r in GameTypes.ALL_RESOURCES:
 		var bf: CardFace = ui._bank_faces[r]
-		if int(bf.count) != int(st.bank.get(r, 0)):
+		if int(bf.count) != int(st.bank.get(r, 0)) or int(bf.pile_count) != int(st.bank.get(r, 0)):
 			ok = false
-	_assert(ok, "Bank faces mirror state.bank")
-	_assert(ui._bank_deck_face != null and int(ui._bank_deck_face.count) == st.dev_deck.size(), "Deck stack mirrors state.dev_deck")
-	_assert(str(ui._bank_deck_label.text) == str(st.dev_deck.size()), "Deck count prints under the deck stack")
+	_assert(ok, "Bank piles mirror state.bank in count and edges")
+	_assert(ui._bank_deck_face != null and int(ui._bank_deck_face.pile_count) == st.dev_deck.size(), "The deck stack mirrors state.dev_deck")
 	st.bank[GameTypes.ResourceType.TIMBER] = 3
 	st.bank[GameTypes.ResourceType.IRON] = 0
 	ui._refresh_ui()
 	var tface: CardFace = ui._bank_faces[GameTypes.ResourceType.TIMBER]
 	var iface: CardFace = ui._bank_faces[GameTypes.ResourceType.IRON]
-	_assert(str(ui._bank_count_labels[GameTypes.ResourceType.TIMBER].text) == "3", "Number is printed under the stack")
-	_assert(_color_close(ui._bank_count_labels[GameTypes.ResourceType.TIMBER].get_theme_color("font_color"), Color(0.68, 0.30, 0.14)), "Low piles show the warning colour under the stack")
-	_assert(str(ui._bank_count_labels[GameTypes.ResourceType.IRON].text) == "empty", "Empty piles read 'empty'")
-	_assert(_color_close(ui._bank_count_labels[GameTypes.ResourceType.IRON].get_theme_color("font_color"), Palette.TEXT_MUTED), "Empty label uses the muted colour")
-	_assert(int(iface.count) == 0 and int(iface.stack_depth) == 0, "Empty piles are greyed with no stack layers")
-	_assert(not bool(tface.count_badge), "Bank faces drop the clipped count badge")
+	_assert(int(tface.pile_count) == 3 and bool(tface.pile_low_tint), "Low piles tint their edges red")
+	_assert(int(iface.pile_count) == 0 and bool(iface.pile_low_tint) and not bool(iface.count_badge), "Empty piles are a faint slot with no number")
+	_assert(tface.tooltip_text.contains("3") and iface.tooltip_text.contains("0"), "The exact number stays on hover")
 	st.bank[GameTypes.ResourceType.GRAIN] = 19
 	ui._refresh_ui()
-	_assert(int(ui._bank_faces[GameTypes.ResourceType.GRAIN].stack_depth) == 4, "Full piles draw four stack layers")
+	var grain_ok := true
+	for r in GameTypes.ALL_RESOURCES:
+		var bf2: CardFace = ui._bank_faces[r]
+		if int(bf2.stack_depth) != 0 or int(bf2.mouse_filter) != int(Control.MOUSE_FILTER_PASS) or int(bf2.focus_mode) != int(Control.FOCUS_NONE):
+			grain_ok = false
+	_assert(grain_ok, "Bank piles drop the old stack layers and stay pass-through, unfocusable cards")
+	_assert(int(ui._bank_faces[GameTypes.ResourceType.GRAIN].pile_count) == 19, "A full pile draws every edge")
+	_assert(_numeric_label_count(ui._bank_deck_face.get_parent().get_parent()) == 0, "The bank row holds no number labels")
 	_assert(bool(ui._bank_faces.values()[0] is CardFace), "Bank stacks are CardFaces")
-	_pass_section("44. Bank Stacks Test (counts mirror state.bank, warning and empty states)")
+	_pass_section("44. Bank Stacks Test (real pile edges, red low-stock cue, counts on hover)")
 
 func _test_port_badges_body(ui: Node) -> void:
 	var seats: Array[SeatConfig] = [
