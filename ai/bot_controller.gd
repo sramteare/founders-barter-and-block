@@ -96,7 +96,8 @@ static func _choose_main_turn_action(state: GameState, player_id: int, difficult
 			return GameAction.play_road_work()
 		if dev_cards.has(GameTypes.DevCardType.HARVEST_BOUNTY):
 			var bounty_pair: Vector2i = _choose_harvest_bounty_resources(state, player_id, city_verts, settle_verts)
-			return GameAction.play_harvest_bounty(bounty_pair.x, bounty_pair.y)
+			if bounty_pair.x >= 0 and bounty_pair.y >= 0:
+				return GameAction.play_harvest_bounty(bounty_pair.x, bounty_pair.y)
 		if dev_cards.has(GameTypes.DevCardType.TRADE_DECREE):
 			var decree_res: int = _choose_trade_decree_resource(state, player_id)
 			if decree_res >= 0:
@@ -517,7 +518,7 @@ static func _choose_maritime_trade(
 				if avail >= ratio and avail > best_surplus:
 					best_surplus = avail
 					best_give = r
-			if best_give != -1:
+			if best_give != -1 and int(state.bank.get(missing_res, 0)) > 0:
 				return GameAction.maritime_trade(best_give, missing_res)
 
 	# Also if holding > 4 of any resource and missing a resource with 0 copies in hand, trade down to avoid 7-discard & unlock builds
@@ -532,8 +533,11 @@ static func _choose_maritime_trade(
 
 	if best_overflow_res != -1:
 		var scariest_need: int = _choose_most_needed_resource(state, player_id, best_overflow_res)
-		if scariest_need != -1 and scariest_need != best_overflow_res:
+		if scariest_need != -1 and scariest_need != best_overflow_res and int(state.bank.get(scariest_need, 0)) > 0:
 			return GameAction.maritime_trade(best_overflow_res, scariest_need)
+		for r in GameTypes.ALL_RESOURCES:
+			if r != best_overflow_res and int(state.bank.get(r, 0)) > 0:
+				return GameAction.maritime_trade(best_overflow_res, r)
 
 	return {}
 
@@ -552,6 +556,39 @@ static func _choose_most_needed_resource(state: GameState, player_id: int, exclu
 	return best_r
 
 static func _choose_harvest_bounty_resources(
+	state: GameState,
+	player_id: int,
+	city_verts: Array[int],
+	settle_verts: Array[int]
+) -> Vector2i:
+	var want: Vector2i = _desired_harvest_bounty_resources(state, player_id, city_verts, settle_verts)
+	if _bank_can_pay_bounty(state, want):
+		return want
+	return _bank_payable_bounty_pair(state)
+
+static func _bank_can_pay_bounty(state: GameState, pair: Vector2i) -> bool:
+	if pair.x < 0 or pair.y < 0:
+		return false
+	var need: Dictionary = {}
+	need[pair.x] = int(need.get(pair.x, 0)) + 1
+	need[pair.y] = int(need.get(pair.y, 0)) + 1
+	for r in need.keys():
+		if int(state.bank.get(int(r), 0)) < int(need[r]):
+			return false
+	return true
+
+static func _bank_payable_bounty_pair(state: GameState) -> Vector2i:
+	var available: Array[int] = []
+	for r in GameTypes.ALL_RESOURCES:
+		if int(state.bank.get(r, 0)) >= 1:
+			available.append(r)
+	if available.size() >= 2:
+		return Vector2i(available[0], available[1])
+	if available.size() == 1 and int(state.bank.get(available[0], 0)) >= 2:
+		return Vector2i(available[0], available[0])
+	return Vector2i(-1, -1)
+
+static func _desired_harvest_bounty_resources(
 	state: GameState,
 	player_id: int,
 	city_verts: Array[int],
@@ -670,10 +707,17 @@ static func _choose_blocker_target(state: GameState, player_id: int, difficulty:
 					best_lead_pips = lead_pips
 					best_lead_tile = t_id
 			if best_lead_tile != -1:
-				return {
-					"tile_id": best_lead_tile,
-					"target_player": leader,
-				}
+				var lead_victims: Array[int] = RulesEngine.get_steal_victims(state, player_id, best_lead_tile)
+				if lead_victims.has(leader):
+					return {
+						"tile_id": best_lead_tile,
+						"target_player": leader,
+					}
+				if lead_victims.is_empty():
+					return {
+						"tile_id": best_lead_tile,
+						"target_player": -1,
+					}
 	var best_tile: int = -1
 	var best_score: float = -999999.0
 	var best_target_opp: int = -1
@@ -714,6 +758,21 @@ static func _choose_blocker_target(state: GameState, player_id: int, difficulty:
 
 	if best_tile == -1:
 		best_tile = (state.blocker_tile + 1) % 19
+
+	var victims: Array[int] = RulesEngine.get_steal_victims(state, player_id, best_tile)
+	if not victims.is_empty():
+		var top_target: int = int(victims[0])
+		var top_score: float = -1.0
+		for vid in victims:
+			var vid_vp: int = state.get_victory_points(vid, false)
+			var vid_cards: int = GameTypes.hand_total(state.players[vid]["hand"])
+			var vid_score: float = float(vid_vp) * 10.0 + float(vid_cards)
+			if vid_score > top_score:
+				top_score = vid_score
+				top_target = vid
+		best_target_opp = top_target
+	else:
+		best_target_opp = -1
 
 	return {
 		"tile_id": best_tile,

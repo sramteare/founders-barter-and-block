@@ -22,9 +22,18 @@ func _ready() -> void:
 		add_child(p)
 		_players.append(p)
 
+func _exit_tree() -> void:
+	for p in _players:
+		if p != null and p.playing:
+			p.stop()
+		if p != null:
+			p.stream = null
+
 func play(name: String) -> void:
 	play_count[name] = int(play_count.get(name, 0)) + 1
 	if not _clips.has(name) or AudioServer.is_bus_mute(0):
+		return
+	if DisplayServer.get_name() == "headless":
 		return
 	for p in _players:
 		if not p.playing:

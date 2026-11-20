@@ -1,6 +1,8 @@
 class_name GameState
 extends RefCounted
 
+const TOTAL_RESOURCE_SUPPLY: int = 19
+
 var seed_val: int = 0
 var num_players: int = 4
 var phase: int = GameTypes.TurnPhase.SETUP_SETTLEMENT_1
@@ -21,6 +23,8 @@ var edge_owner: Array[int] = []
 
 var players: Array = []
 var dev_deck: Array[int] = []
+var bank: Dictionary = {}
+var last_steal: Dictionary = {}
 
 var pending_discards: Dictionary = {}
 var open_trade: Dictionary = {}
@@ -63,6 +67,11 @@ static func create_new_game(seed_val_in: int, num_players_in: int = 4, balanced:
 	gs.edge_owner = []
 	gs.edge_owner.resize(72)
 	gs.edge_owner.fill(-1)
+
+	gs.bank = {}
+	for r in GameTypes.ALL_RESOURCES:
+		gs.bank[r] = TOTAL_RESOURCE_SUPPLY
+	gs.last_steal = {}
 
 	gs.players = []
 	for p in range(gs.num_players):
@@ -139,6 +148,55 @@ func get_trade_ratio(player_id: int, res: int) -> int:
 				best_ratio = 3
 	return best_ratio
 
+func resource_totals_ok() -> bool:
+	for r in GameTypes.ALL_RESOURCES:
+		var total := int(bank.get(r, 0))
+		for p in range(num_players):
+			total += int(players[p]["hand"].get(r, 0))
+		if total != TOTAL_RESOURCE_SUPPLY:
+			return false
+	return true
+
+func get_standings() -> Array:
+	var rows: Array = []
+	for p in range(num_players):
+		var pd: Dictionary = players[p]
+		var settlements := 0
+		var cities := 0
+		for v in range(vertex_owner.size()):
+			if vertex_owner[v] == p:
+				if vertex_building[v] == GameTypes.BuildingType.SETTLEMENT:
+					settlements += 1
+				elif vertex_building[v] == GameTypes.BuildingType.CITY:
+					cities += 1
+		var charters := 0
+		for c in pd["dev_cards"]:
+			if int(c) == GameTypes.DevCardType.CHARTER_POINT:
+				charters += 1
+		for c in pd["new_dev_cards"]:
+			if int(c) == GameTypes.DevCardType.CHARTER_POINT:
+				charters += 1
+		rows.append({
+			"pid": p,
+			"name": pd["name"],
+			"vp": get_victory_points(p, true),
+			"settlements": settlements,
+			"cities": cities,
+			"longest_route": longest_route_holder == p,
+			"largest_guard": largest_guard_holder == p,
+			"charters": charters,
+		})
+	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a["vp"]) != int(b["vp"]):
+			return int(a["vp"]) > int(b["vp"])
+		if int(a["cities"]) != int(b["cities"]):
+			return int(a["cities"]) > int(b["cities"])
+		if int(a["settlements"]) != int(b["settlements"]):
+			return int(a["settlements"]) > int(b["settlements"])
+		return int(a["pid"]) < int(b["pid"])
+	)
+	return rows
+
 func clone() -> GameState:
 	var copy := GameState.new()
 	copy.seed_val = seed_val
@@ -179,6 +237,8 @@ func clone() -> GameState:
 		})
 
 	copy.dev_deck = dev_deck.duplicate()
+	copy.bank = bank.duplicate()
+	copy.last_steal = last_steal.duplicate()
 	copy.pending_discards = pending_discards.duplicate()
 	copy.open_trade = open_trade.duplicate(true)
 	copy.open_trades_this_turn = open_trades_this_turn

@@ -5,11 +5,39 @@ var auto_ai: bool = true
 
 var _ai_timer: Timer = null
 var _pending_guard_card: bool = false
+var _steal_chooser: PanelContainer = null
+var _steal_chooser_rows: VBoxContainer = null
+var _steal_pending: Dictionary = {}
+var _steal_victims: Array[int] = []
+var _steal_victim_btns: Array[Button] = []
+var _toast_layer: VBoxContainer = null
+var _toast_labels: Array[Label] = []
+var _offer_strip: PanelContainer = null
+var _offer_strip_label: Label = null
+var _offer_strip_chips: HBoxContainer = null
+var _trade_close_btn: Button = null
+var _trade_last_ot_from: int = -1
+var _last_steal_serial: int = 0
+var _prev_blocker_tile: int = -1
+var _scoreboard_row_panels: Dictionary = {}
 
 # Top bar UI
 var _phase_label: Label = null
 var _dice_widget: DicePairWidget = null
 var _menu_btn: Button = null
+var _help_costs_btn: Button = null
+var _costs_popup: PanelContainer = null
+var _bar_extra_nodes: Array[Control] = []
+var _splash_overlay: ColorRect = null
+var _splash_title: Label = null
+var _splash_banner: ColorRect = null
+var _splash_rows: VBoxContainer = null
+var _splash_turns: Label = null
+var _splash_new_game_btn: Button = null
+var _splash_lobby_btn: Button = null
+var _splash_view_board_btn: Button = null
+var _results_btn: Button = null
+var _splash_shown: bool = false
 var _menu_popup: PopupMenu = null
 var _step_top_btn: Button = null
 
@@ -17,6 +45,10 @@ var _step_top_btn: Button = null
 var _board_view: BoardView = null
 var _center_split: HSplitContainer = null
 var _scoreboard_box: VBoxContainer = null
+var _bank_faces: Dictionary = {}
+var _bank_count_labels: Dictionary = {}
+var _bank_deck_label: Label = null
+var _bank_deck_face: CardFace = null
 var _status_banner_label: Label = null
 
 # Bottom visual card hand bar
@@ -49,9 +81,13 @@ var _device_pass_btn: Button = null
 var _no_space_focus_btns: Array = []
 
 # Discard panel
-var _discard_panel: PanelContainer = null
-var _discard_info_label: Label = null
-var _auto_discard_btn: Button = null
+var _discard_mode_box: HBoxContainer = null
+var _discard_heading: Label = null
+var _discard_confirm_btn: Button = null
+var _discard_auto_btn: Button = null
+var _discard_minus_btns: Dictionary = {}
+var _discard_pick: Dictionary = {}
+var _discard_pick_pid: int = -1
 
 # Action buttons
 var _trade_btn: Button = null
@@ -60,7 +96,6 @@ var _cancel_pick_btn: Button = null
 var _end_turn_btn: Button = null
 
 # Build card rows: key -> {btn, marker, cost, name}
-var _build_rows: Dictionary = {}
 var _build_bubble: PanelContainer = null
 var _build_bubble_title: Label = null
 var _build_bubble_cost_box: HBoxContainer = null
@@ -139,6 +174,8 @@ var _settings_text_opt: OptionButton = null
 var _settings_speed_opt: OptionButton = null
 var _settings_motion_check: CheckBox = null
 var _settings_auto_check: CheckBox = null
+var _settings_portnames_check: CheckBox = null
+var _show_port_names: bool = false
 var _settings_step_btn: Button = null
 var _settings_ai_difficulty: int = 2
 var _settings_muted: bool = false
@@ -235,7 +272,26 @@ func _build_ui() -> void:
 	_menu_btn.add_child(_menu_popup)
 	_menu_btn.pressed.connect(_open_menu_popup)
 	top_hbox.add_child(_menu_btn)
-
+	_help_costs_btn = Button.new()
+	_help_costs_btn.text = "?"
+	_help_costs_btn.tooltip_text = "Build costs"
+	_help_costs_btn.custom_minimum_size = Vector2(40, 40)
+	_help_costs_btn.add_theme_font_size_override("font_size", 18)
+	_style_button(_help_costs_btn, "ghost")
+	_help_costs_btn.pressed.connect(_open_costs_popup)
+	top_hbox.add_child(_help_costs_btn)
+	_results_btn = Button.new()
+	_results_btn.text = "Results"
+	_results_btn.tooltip_text = "Show the final standings"
+	_results_btn.custom_minimum_size = Vector2(70, 40)
+	_results_btn.add_theme_font_size_override("font_size", 13)
+	_style_button(_results_btn, "ghost")
+	_results_btn.visible = false
+	_results_btn.pressed.connect(func() -> void:
+		if _splash_overlay != null and _splash_shown:
+			_splash_overlay.visible = true
+	)
+	top_hbox.add_child(_results_btn)
 	var title_lbl := Label.new()
 	title_lbl.text = "Founders: Barter & Block"
 	title_lbl.add_theme_font_size_override("font_size", 18)
@@ -286,10 +342,14 @@ func _build_ui() -> void:
 	_board_view.edge_clicked.connect(_on_board_edge_clicked)
 	_board_view.tile_clicked.connect(_on_board_tile_clicked)
 	_board_view.build_spot_clicked.connect(_on_build_spot_clicked)
+	_board_view.background_clicked.connect(_on_board_background_clicked)
 	left_column.add_child(_board_view)
 
 	_build_trade_tray(left_column)
 	_build_build_bubble()
+	_build_steal_chooser()
+	_build_costs_popup()
+	_build_toast_layer()
 
 	var right_panel := PanelContainer.new()
 	right_panel.custom_minimum_size = Vector2(320, 0)
@@ -336,14 +396,60 @@ func _build_ui() -> void:
 	_scoreboard_box.add_theme_constant_override("separation", 4)
 	top_vbox.add_child(_scoreboard_box)
 
-	# Build card (Road / Settlement / City rows)
-	var build_title := Label.new()
-	build_title.text = "BUILD"
-	build_title.add_theme_font_size_override("font_size", 14)
-	build_title.add_theme_color_override("font_color", Palette.HEADING)
-	top_vbox.add_child(build_title)
+	# Bank supply section — how many resource cards are still in the bank.
+	var bank_title := Label.new()
+	bank_title.text = "BANK"
+	bank_title.add_theme_font_size_override("font_size", 14)
+	bank_title.add_theme_color_override("font_color", Palette.HEADING)
+	top_vbox.add_child(bank_title)
 
-	_build_build_card(top_vbox)
+	var bank_row := HBoxContainer.new()
+	bank_row.add_theme_constant_override("separation", 6)
+	top_vbox.add_child(bank_row)
+	for r in GameTypes.ALL_RESOURCES:
+		var bcol := VBoxContainer.new()
+		bcol.add_theme_constant_override("separation", 3)
+		bank_row.add_child(bcol)
+		var bf := CardFace.new()
+		bf.custom_minimum_size = Vector2(42, 42.0 / CardFace.RATIO)
+		bf.focusable = false
+		bf.count_badge = false
+		bf.kind = "resource"
+		bf.resource = r
+		bf.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var res_id := r
+		bf.tooltip_text = "%s in the bank" % GameTypes.resource_name(res_id)
+		bcol.add_child(bf)
+		var blbl := Label.new()
+		blbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		blbl.add_theme_font_size_override("font_size", 13)
+		blbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		bcol.add_child(blbl)
+		_bank_faces[r] = bf
+		_bank_count_labels[r] = blbl
+	var deck_sep := VSeparator.new()
+	deck_sep.custom_minimum_size = Vector2(8, 40)
+	bank_row.add_child(deck_sep)
+	var deck_col := VBoxContainer.new()
+	deck_col.add_theme_constant_override("separation", 3)
+	bank_row.add_child(deck_col)
+	var deck_face := CardFace.new()
+	deck_col.add_child(deck_face)
+	deck_face.custom_minimum_size = Vector2(42, 42.0 / CardFace.RATIO)
+	deck_face.focusable = false
+	deck_face.count_badge = false
+	deck_face.kind = "back"
+	deck_face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	deck_face.tooltip_text = "Action Cards left in the deck"
+	_bank_deck_face = deck_face
+	var deck_lbl := Label.new()
+	deck_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	deck_lbl.add_theme_font_size_override("font_size", 13)
+	deck_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	deck_col.add_child(deck_lbl)
+	_bank_deck_label = deck_lbl
+
+	# Costs live in the "?" popover next to the menu; building happens on the board.
 
 	_cancel_pick_btn = Button.new()
 	_cancel_pick_btn.text = "Cancel Board Selection"
@@ -353,24 +459,6 @@ func _build_ui() -> void:
 	_cancel_pick_btn.pressed.connect(_cancel_current_pick)
 	_guard_action_button_focus(_cancel_pick_btn)
 	top_vbox.add_child(_cancel_pick_btn)
-
-	# Discard Panel (on a 7 roll when Human has >7 cards)
-	_discard_panel = _make_card_panel(Color(Palette.ACCENT_RED, 0.22))
-	_discard_panel.visible = false
-	top_vbox.add_child(_discard_panel)
-	var disc_vbox := VBoxContainer.new()
-	disc_vbox.add_theme_constant_override("separation", 6)
-	_discard_panel.add_child(disc_vbox)
-	_discard_info_label = Label.new()
-	_discard_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_discard_info_label.add_theme_font_size_override("font_size", 13)
-	_discard_info_label.add_theme_color_override("font_color", Palette.TEXT)
-	disc_vbox.add_child(_discard_info_label)
-	_auto_discard_btn = Button.new()
-	_auto_discard_btn.text = "Auto-Discard Required Cards"
-	_style_button(_auto_discard_btn, "danger")
-	_auto_discard_btn.pressed.connect(_on_auto_discard_pressed)
-	disc_vbox.add_child(_auto_discard_btn)
 
 	# Context sub-panels (Maritime, Barter, Bounty, Decree)
 	_build_subpanels(top_vbox)
@@ -418,164 +506,16 @@ func _build_ui() -> void:
 	_style_rich_label(_event_log)
 	_log_panel.add_child(_event_log)
 
-	# 3. Bottom Visual Card Hand Bar (always visible)
+	# 3. Bottom Visual Card Hand Bar (always visible), with the open-offer strip above it
+	_build_offer_strip(root_vbox)
 	_build_hand_bar(root_vbox)
 
 	# 4. Modal Overlays (lobby, settings, help — help is topmost)
 	_build_lobby_overlay()
 	_build_settings_overlay()
 	_build_help_overlay()
+	_build_splash_overlay()
 
-func _build_build_card(parent: VBoxContainer) -> void:
-	var card := _make_card_panel(Palette.PANEL_BG_ALT)
-	var card_style: StyleBoxFlat = card.get_theme_stylebox("panel")
-	card_style.set_border_width_all(0)
-	card_style.shadow_size = 0
-	parent.add_child(card)
-
-	var rows_vbox := VBoxContainer.new()
-	rows_vbox.add_theme_constant_override("separation", 5)
-	card.add_child(rows_vbox)
-
-	var rows_def := [
-		["road", "Road", {
-			GameTypes.ResourceType.TIMBER: 1,
-			GameTypes.ResourceType.CLAY: 1,
-		}],
-		["settlement", "Settlement", {
-			GameTypes.ResourceType.TIMBER: 1,
-			GameTypes.ResourceType.CLAY: 1,
-			GameTypes.ResourceType.FLEECE: 1,
-			GameTypes.ResourceType.GRAIN: 1,
-		}],
-		["city", "City", {
-			GameTypes.ResourceType.GRAIN: 2,
-			GameTypes.ResourceType.IRON: 3,
-		}],
-	]
-	for def in rows_def:
-		var key: String = str(def[0])
-		var display_name: String = str(def[1])
-		var cost: Dictionary = def[2]
-
-		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(0, 44)
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-		var hbox := HBoxContainer.new()
-		hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		hbox.offset_left = 10
-		hbox.offset_right = -8
-		hbox.offset_top = 4
-		hbox.offset_bottom = -4
-		hbox.add_theme_constant_override("separation", 6)
-		hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btn.add_child(hbox)
-
-		var row_labels: Array = []
-
-		var name_lbl := Label.new()
-		name_lbl.text = display_name
-		name_lbl.add_theme_font_size_override("font_size", 14)
-		name_lbl.add_theme_color_override("font_color", Palette.TEXT)
-		name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		hbox.add_child(name_lbl)
-		row_labels.append(name_lbl)
-
-		var cost_box := HBoxContainer.new()
-		cost_box.add_theme_constant_override("separation", 6)
-		cost_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hbox.add_child(cost_box)
-		for r in GameTypes.ALL_RESOURCES:
-			var amt: int = int(cost.get(r, 0))
-			if amt <= 0:
-				continue
-			var cell := _make_cost_cell(r, amt)
-			row_labels.append(cell.get_child(1))
-			cost_box.add_child(cell)
-
-		var marker := Label.new()
-		marker.text = ""
-		marker.custom_minimum_size = Vector2(18, 0)
-		marker.add_theme_font_size_override("font_size", 15)
-		marker.add_theme_color_override("font_color", Palette.ACCENT_GREEN)
-		marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hbox.add_child(marker)
-
-		match key:
-			"road":
-				btn.pressed.connect(_on_build_road_pressed)
-			"settlement":
-				btn.pressed.connect(_on_build_settlement_pressed)
-			"city":
-				btn.pressed.connect(_on_upgrade_city_pressed)
-		_apply_build_row_style(btn, false)
-		rows_vbox.add_child(btn)
-		_guard_action_button_focus(btn)
-		_build_rows[key] = {"btn": btn, "marker": marker, "cost": cost, "name": display_name, "labels": row_labels}
-
-func _make_cost_cell(r: int, amt: int) -> HBoxContainer:
-	var cell := HBoxContainer.new()
-	cell.add_theme_constant_override("separation", 3)
-	cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var sq := Panel.new()
-	sq.custom_minimum_size = Vector2(12, 12)
-	sq.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var sqs := StyleBoxFlat.new()
-	sqs.bg_color = Palette.resource(r)
-	sqs.border_color = Color(Palette.INK, 0.6)
-	sqs.set_border_width_all(1)
-	sqs.set_corner_radius_all(3)
-	sq.add_theme_stylebox_override("panel", sqs)
-	cell.add_child(sq)
-	var cost_lbl := Label.new()
-	cost_lbl.text = "%d %s" % [amt, GameTypes.resource_name(r).left(1)]
-	cost_lbl.add_theme_font_size_override("font_size", 13)
-	cost_lbl.add_theme_color_override("font_color", Palette.TEXT)
-	cost_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	cell.add_child(cost_lbl)
-	return cell
-
-func _apply_build_row_style(btn: Button, enabled: bool) -> void:
-	var st := StyleBoxFlat.new()
-	if enabled:
-		st.bg_color = Palette.PANEL_BG
-		st.border_color = Palette.ACCENT_GREEN
-	else:
-		st.bg_color = Palette.BUTTON_BG_DISABLED
-		st.border_color = Color(Palette.PANEL_BORDER, 0.5)
-	st.border_width_left = 4
-	st.border_width_top = 2
-	st.border_width_right = 2
-	st.border_width_bottom = 2
-	st.set_corner_radius_all(8)
-	st.content_margin_left = 8
-	st.content_margin_right = 6
-	st.content_margin_top = 5
-	st.content_margin_bottom = 5
-	btn.add_theme_stylebox_override("normal", st)
-
-	var st_h: StyleBoxFlat = st.duplicate() as StyleBoxFlat
-	if enabled:
-		st_h.bg_color = Palette.PANEL_BG.lightened(0.03)
-	btn.add_theme_stylebox_override("hover", st_h)
-
-	var st_p: StyleBoxFlat = st.duplicate() as StyleBoxFlat
-	if enabled:
-		st_p.bg_color = Palette.PAPER_DARK
-	btn.add_theme_stylebox_override("pressed", st_p)
-
-	var st_d: StyleBoxFlat = st.duplicate() as StyleBoxFlat
-	btn.add_theme_stylebox_override("disabled", st_d)
-
-	var st_f: StyleBoxFlat = st.duplicate() as StyleBoxFlat
-	st_f.bg_color = Color(Palette.PANEL_BG, 0.0)
-	st_f.border_color = Palette.HEADING
-	st_f.border_width_top = 3
-	st_f.border_width_right = 3
-	st_f.border_width_bottom = 3
-	btn.add_theme_stylebox_override("focus", st_f)
 
 func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_hand_bar_panel = PanelContainer.new()
@@ -612,54 +552,54 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	hb.add_child(_hand_view_name)
 
 	for r in GameTypes.ALL_RESOURCES:
-		var card := Button.new()
-		card.custom_minimum_size = Vector2(60, 58)
-		_style_card_button(card)
-		card.tooltip_text = "Click to offer in a trade"
-
-		var cv_panel := PanelContainer.new()
-		cv_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		cv_panel.offset_left = 5
-		cv_panel.offset_top = 4
-		cv_panel.offset_right = -5
-		cv_panel.offset_bottom = -4
-		cv_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cv_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
-		card.add_child(cv_panel)
-
-		var cv := VBoxContainer.new()
-		cv.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cv.add_theme_constant_override("separation", 2)
-		cv_panel.add_child(cv)
-
-		var strip := ColorRect.new()
-		strip.custom_minimum_size = Vector2(0, 8)
-		strip.color = Palette.resource(r)
-		strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cv.add_child(strip)
-
-		var name_lbl := Label.new()
-		name_lbl.text = GameTypes.resource_name(r)
-		name_lbl.add_theme_font_size_override("font_size", 13)
-		name_lbl.add_theme_color_override("font_color", Palette.TEXT)
-		name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cv.add_child(name_lbl)
-
-		var count_lbl := Label.new()
-		count_lbl.text = "x0"
-		count_lbl.add_theme_font_size_override("font_size", 16)
-		count_lbl.add_theme_color_override("font_color", Palette.INK)
-		count_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cv.add_child(count_lbl)
-
+		var face := CardFace.new()
+		face.custom_minimum_size = Vector2(62, 62.0 / CardFace.RATIO)
+		face.focusable = false
+		face.kind = "resource"
+		face.resource = r
+		face.tooltip_text = "Click to offer in a trade"
 		var res_id := r
-		card.pressed.connect(func() -> void: _on_resource_card_pressed(res_id))
-		hb.add_child(card)
-		_res_card_refs[r] = {"card": card, "count": count_lbl}
+		face.pressed.connect(func() -> void: _on_resource_card_pressed(res_id))
+		face.badge_pressed.connect(func() -> void: _discard_take_back(res_id))
+		hb.add_child(face)
+		_res_card_refs[r] = face
+
+	_discard_mode_box = HBoxContainer.new()
+	_discard_mode_box.add_theme_constant_override("separation", 6)
+	_discard_mode_box.visible = false
+	hb.add_child(_discard_mode_box)
+	_discard_heading = Label.new()
+	_discard_heading.add_theme_font_size_override("font_size", 14)
+	_discard_heading.add_theme_color_override("font_color", Palette.ACCENT_RED.darkened(0.15))
+	_discard_heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_discard_heading.custom_minimum_size = Vector2(110, 0)
+	_discard_heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_discard_heading.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_discard_mode_box.add_child(_discard_heading)
+	_discard_confirm_btn = Button.new()
+	_discard_confirm_btn.text = "Discard"
+	_discard_confirm_btn.custom_minimum_size = Vector2(88, 40)
+	_discard_confirm_btn.add_theme_font_size_override("font_size", 14)
+	_discard_confirm_btn.tooltip_text = "Discard the picked cards"
+	_style_button(_discard_confirm_btn, "danger")
+	_discard_confirm_btn.disabled = true
+	_discard_confirm_btn.pressed.connect(_on_discard_confirm_pressed)
+	_guard_action_button_focus(_discard_confirm_btn)
+	_discard_mode_box.add_child(_discard_confirm_btn)
+	_discard_auto_btn = Button.new()
+	_discard_auto_btn.text = "Pick for me"
+	_discard_auto_btn.custom_minimum_size = Vector2(96, 40)
+	_discard_auto_btn.add_theme_font_size_override("font_size", 14)
+	_discard_auto_btn.tooltip_text = "Fill the selection with a sensible choice"
+	_style_button(_discard_auto_btn, "normal")
+	_discard_auto_btn.pressed.connect(_on_discard_auto_fill_pressed)
+	_guard_action_button_focus(_discard_auto_btn)
+	_discard_mode_box.add_child(_discard_auto_btn)
 
 	var div0 := VSeparator.new()
 	div0.add_theme_constant_override("separation", 4)
 	hb.add_child(div0)
+	_bar_extra_nodes.append(div0)
 
 	_trade_btn = Button.new()
 	_trade_btn.text = "Trade"
@@ -670,10 +610,12 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_trade_btn.pressed.connect(_toggle_trade_tray)
 	_guard_action_button_focus(_trade_btn)
 	hb.add_child(_trade_btn)
+	_bar_extra_nodes.append(_trade_btn)
 
 	var div := VSeparator.new()
 	div.add_theme_constant_override("separation", 4)
 	hb.add_child(div)
+	_bar_extra_nodes.append(div)
 
 	var chip_defs := [
 		[GameTypes.DevCardType.GUARD, "Guard", Palette.SEA_DEEP],
@@ -684,15 +626,11 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	]
 	for def in chip_defs:
 		var ctype: int = int(def[0])
-		var accent: Color = def[2]
-		var chip := Button.new()
-		chip.text = "%s x0" % str(def[1])
-		chip.custom_minimum_size = Vector2(0, 40)
-		chip.add_theme_font_size_override("font_size", 13)
-		_style_button(chip, "normal")
-		_tighten_button_margins(chip, 6)
-		chip.add_theme_color_override("font_color", accent.darkened(0.25))
-		chip.add_theme_color_override("font_disabled_color", Palette.TEXT_MUTED)
+		var chip := CardFace.new()
+		chip.custom_minimum_size = Vector2(62, 62.0 / CardFace.RATIO)
+		chip.kind = "action"
+		chip.action = ctype
+		chip.disabled = true
 		match ctype:
 			GameTypes.DevCardType.GUARD:
 				chip.pressed.connect(_on_play_guard_pressed)
@@ -702,10 +640,10 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 				chip.pressed.connect(_on_play_bounty_pressed)
 			GameTypes.DevCardType.TRADE_DECREE:
 				chip.pressed.connect(_on_play_decree_pressed)
-		chip.disabled = true
 		_guard_action_button_focus(chip)
 		hb.add_child(chip)
 		_action_chips[ctype] = chip
+		_bar_extra_nodes.append(chip)
 
 	_buy_card_btn = Button.new()
 	_buy_card_btn.text = "Buy card"
@@ -718,6 +656,7 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_buy_card_btn.disabled = true
 	_guard_action_button_focus(_buy_card_btn)
 	hb.add_child(_buy_card_btn)
+	_bar_extra_nodes.append(_buy_card_btn)
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -727,11 +666,13 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_dice_widget.tooltip_text = "Last Roll"
 	_dice_widget.pressed.connect(_on_roll_pressed)
 	hb.add_child(_dice_widget)
+	_bar_extra_nodes.append(_dice_widget)
 
 	var dice_gap := Control.new()
 	dice_gap.custom_minimum_size = Vector2(6, 0)
 	dice_gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hb.add_child(dice_gap)
+	_bar_extra_nodes.append(dice_gap)
 
 	_end_turn_btn = Button.new()
 	_end_turn_btn.text = "End Turn"
@@ -743,8 +684,31 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_end_turn_btn.pressed.connect(_on_end_turn_pressed)
 	_guard_action_button_focus(_end_turn_btn)
 	hb.add_child(_end_turn_btn)
+	_bar_extra_nodes.append(_end_turn_btn)
 
 	_build_device_pass_cover()
+
+func _make_cost_cell(r: int, amt: int) -> HBoxContainer:
+	var cell := HBoxContainer.new()
+	cell.add_theme_constant_override("separation", 3)
+	cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sq := Panel.new()
+	sq.custom_minimum_size = Vector2(12, 12)
+	sq.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sqs := StyleBoxFlat.new()
+	sqs.bg_color = Palette.resource(r)
+	sqs.border_color = Color(Palette.INK, 0.6)
+	sqs.set_border_width_all(1)
+	sqs.set_corner_radius_all(3)
+	sq.add_theme_stylebox_override("panel", sqs)
+	cell.add_child(sq)
+	var cost_lbl := Label.new()
+	cost_lbl.text = "%d %s" % [amt, GameTypes.resource_name(r).left(1)]
+	cost_lbl.add_theme_font_size_override("font_size", 13)
+	cost_lbl.add_theme_color_override("font_color", Palette.TEXT)
+	cost_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cell.add_child(cost_lbl)
+	return cell
 
 func _build_subpanels(parent: VBoxContainer) -> void:
 	_subpanel_container = _make_card_panel(Palette.PANEL_BG_ALT)
@@ -955,8 +919,113 @@ func _update_lobby_seat_rows() -> void:
 # ---------------------------------------------------------------------
 # Menu, overlays, settings persistence
 # ---------------------------------------------------------------------
+func _build_cost_for(kind: String) -> Dictionary:
+	match kind:
+		"road":
+			return {
+				GameTypes.ResourceType.TIMBER: 1,
+				GameTypes.ResourceType.CLAY: 1,
+			}
+		"settlement":
+			return {
+				GameTypes.ResourceType.TIMBER: 1,
+				GameTypes.ResourceType.CLAY: 1,
+				GameTypes.ResourceType.FLEECE: 1,
+				GameTypes.ResourceType.GRAIN: 1,
+			}
+		"city":
+			return {
+				GameTypes.ResourceType.GRAIN: 2,
+				GameTypes.ResourceType.IRON: 3,
+			}
+	return {}
+
+func _build_costs_popup() -> void:
+	_costs_popup = PanelContainer.new()
+	var st := _paper_panel_style(true)
+	st.set_corner_radius_all(9)
+	st.set_border_width_all(2)
+	st.border_color = Palette.ACCENT_GOLD.darkened(0.15)
+	st.shadow_color = Palette.PAPER_SHADOW
+	st.shadow_size = 5
+	st.content_margin_left = 10
+	st.content_margin_right = 10
+	st.content_margin_top = 10
+	st.content_margin_bottom = 10
+	_costs_popup.add_theme_stylebox_override("panel", st)
+	_costs_popup.visible = false
+	add_child(_costs_popup)
+	var costs_col := VBoxContainer.new()
+	costs_col.add_theme_constant_override("separation", 6)
+	_costs_popup.add_child(costs_col)
+	for cost_def in [
+		["Road", _build_cost_for("road")],
+		["Settlement", _build_cost_for("settlement")],
+		["City (upgrade)", _build_cost_for("city")],
+		["Action Card", {
+			GameTypes.ResourceType.FLEECE: 1,
+			GameTypes.ResourceType.GRAIN: 1,
+			GameTypes.ResourceType.IRON: 1,
+		}],
+	]:
+		var crow := HBoxContainer.new()
+		crow.add_theme_constant_override("separation", 10)
+		costs_col.add_child(crow)
+		var clbl := Label.new()
+		clbl.text = str(cost_def[0])
+		clbl.custom_minimum_size = Vector2(110, 0)
+		clbl.add_theme_font_size_override("font_size", 14)
+		clbl.add_theme_color_override("font_color", Palette.TEXT)
+		crow.add_child(clbl)
+		var ccost: Dictionary = cost_def[1]
+		for r in GameTypes.ALL_RESOURCES:
+			var amt: int = int(ccost.get(r, 0))
+			if amt > 0:
+				crow.add_child(_make_cost_cell(r, amt))
+	var cost_hint := Label.new()
+	cost_hint.text = "Click a glowing spot on the board to build."
+	cost_hint.add_theme_font_size_override("font_size", 12)
+	cost_hint.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	costs_col.add_child(cost_hint)
+	var cost_help_btn := Button.new()
+	cost_help_btn.text = "Full help (F1)"
+	cost_help_btn.add_theme_font_size_override("font_size", 13)
+	_style_button(cost_help_btn, "normal")
+	cost_help_btn.pressed.connect(func() -> void:
+		_costs_popup.visible = false
+		_show_overlay("help")
+	)
+	costs_col.add_child(cost_help_btn)
+
+func _open_costs_popup() -> void:
+	_cancel_build_bubble()
+	if _costs_popup.visible:
+		_costs_popup.visible = false
+		return
+	_costs_popup.reset_size()
+	var pos := _help_costs_btn.global_position + Vector2(0.0, _help_costs_btn.size.y + 4.0)
+	var br := get_global_rect()
+	var psize := _costs_popup.get_combined_minimum_size()
+	pos.x = clampf(pos.x, br.position.x + 2, maxf(br.position.x + 2, br.end.x - psize.x - 2))
+	pos.y = clampf(pos.y, br.position.y + 2, maxf(br.position.y + 2, br.end.y - psize.y - 2))
+	_costs_popup.position = pos
+	_costs_popup.visible = true
+
+func _close_costs_popup() -> void:
+	if _costs_popup != null:
+		_costs_popup.visible = false
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if _costs_popup != null and _costs_popup.visible:
+			var lp := _costs_popup.get_global_rect()
+			var gp := get_global_mouse_position()
+			if not lp.has_point(gp):
+				_close_costs_popup()
+
 func _open_menu_popup() -> void:
 	_cancel_build_bubble()
+	_close_costs_popup()
 	_menu_popup.reset_size()
 	var gp := _menu_btn.get_screen_position()
 	var pop_pos := Vector2i(int(gp.x), int(gp.y + _menu_btn.size.y + 2))
@@ -974,10 +1043,11 @@ func _on_menu_item(id: int) -> void:
 			get_tree().quit()
 
 func _any_overlay_visible() -> bool:
-	return _lobby_overlay.visible or _settings_overlay.visible or _help_overlay.visible
+	return _lobby_overlay.visible or _settings_overlay.visible or _help_overlay.visible or (_splash_overlay != null and _splash_overlay.visible)
 
 func _show_overlay(which: String) -> void:
 	_cancel_build_bubble()
+	_close_costs_popup()
 	_lobby_overlay.visible = which == "lobby"
 	_settings_overlay.visible = which == "settings"
 	_help_overlay.visible = which == "help"
@@ -985,12 +1055,160 @@ func _show_overlay(which: String) -> void:
 func _close_overlays() -> void:
 	_show_overlay("none")
 
+func _build_splash_overlay() -> void:
+	_splash_overlay = ColorRect.new()
+	_splash_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_splash_overlay.color = Color(0.12, 0.09, 0.06, 0.62)
+	_splash_overlay.visible = false
+	add_child(_splash_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_splash_overlay.add_child(center)
+	var panel := PanelContainer.new()
+	var st := _paper_panel_style(true)
+	st.set_corner_radius_all(12)
+	st.set_border_width_all(3)
+	st.border_color = Palette.ACCENT_GOLD.darkened(0.1)
+	st.shadow_color = Palette.PAPER_SHADOW
+	st.shadow_size = 10
+	st.content_margin_left = 22
+	st.content_margin_right = 22
+	st.content_margin_top = 16
+	st.content_margin_bottom = 16
+	panel.add_theme_stylebox_override("panel", st)
+	center.add_child(panel)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 10)
+	panel.add_child(col)
+	_splash_banner = ColorRect.new()
+	_splash_banner.custom_minimum_size = Vector2(360, 10)
+	_splash_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(_splash_banner)
+	_splash_title = Label.new()
+	_splash_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_splash_title.add_theme_font_size_override("font_size", 26)
+	_splash_title.add_theme_color_override("font_color", Palette.HEADING)
+	col.add_child(_splash_title)
+	_splash_turns = Label.new()
+	_splash_turns.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_splash_turns.add_theme_font_size_override("font_size", 13)
+	_splash_turns.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	col.add_child(_splash_turns)
+	_splash_rows = VBoxContainer.new()
+	_splash_rows.add_theme_constant_override("separation", 4)
+	col.add_child(_splash_rows)
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	col.add_child(btn_row)
+	_splash_new_game_btn = Button.new()
+	_splash_new_game_btn.text = "▶ New Game"
+	_splash_new_game_btn.custom_minimum_size = Vector2(120, 40)
+	_style_button(_splash_new_game_btn, "primary")
+	_splash_new_game_btn.pressed.connect(func() -> void:
+		_splash_overlay.visible = false
+		_results_btn.visible = false
+		_start_match_from_lobby_settings()
+	)
+	btn_row.add_child(_splash_new_game_btn)
+	_splash_lobby_btn = Button.new()
+	_splash_lobby_btn.text = "Back to Lobby"
+	_splash_lobby_btn.custom_minimum_size = Vector2(120, 40)
+	_style_button(_splash_lobby_btn, "ghost")
+	_splash_lobby_btn.pressed.connect(_show_lobby)
+	btn_row.add_child(_splash_lobby_btn)
+	_splash_view_board_btn = Button.new()
+	_splash_view_board_btn.text = "View Board"
+	_splash_view_board_btn.tooltip_text = "Hide the results and look at the board"
+	_splash_view_board_btn.custom_minimum_size = Vector2(120, 40)
+	_style_button(_splash_view_board_btn, "ghost")
+	_splash_view_board_btn.pressed.connect(func() -> void:
+		_splash_overlay.visible = false
+		_results_btn.visible = true
+	)
+	btn_row.add_child(_splash_view_board_btn)
+
+func _show_splash(state: GameState) -> void:
+	_splash_shown = true
+	var standings: Array = state.get_standings()
+	var winner_pid: int = int(state.winner)
+	var ordered: Array = []
+	if winner_pid >= 0 and winner_pid < standings.size():
+		for row0 in standings:
+			if int(row0["pid"]) == winner_pid:
+				ordered.append(row0)
+	for row0 in standings:
+		if not ordered.has(row0):
+			ordered.append(row0)
+	if ordered.is_empty():
+		winner_pid = -1
+	_splash_title.add_theme_color_override("font_color", Palette.HEADING)
+	if _splash_banner != null:
+		_splash_banner.color = GameTypes.PLAYER_COLORS[winner_pid].darkened(0.15) if winner_pid >= 0 else Palette.TEXT_MUTED
+	_splash_title.text = "%s wins!" % (str(ordered[0]["name"]) if not ordered.is_empty() else "Nobody")
+	_splash_turns.text = "Played %d turns" % state.turn_number
+	for c in _splash_rows.get_children():
+		c.queue_free()
+	var ranks := ["1st", "2nd", "3rd", "4th"]
+	for i in range(ordered.size()):
+		var row: Dictionary = ordered[i]
+		var pid: int = int(row["pid"])
+		var hbox := HBoxContainer.new()
+		hbox.add_theme_constant_override("separation", 8)
+		_splash_rows.add_child(hbox)
+		var rank_lbl := Label.new()
+		rank_lbl.text = ranks[i] if i < ranks.size() else "%d." % (i + 1)
+		rank_lbl.custom_minimum_size = Vector2(36, 0)
+		rank_lbl.add_theme_font_size_override("font_size", 14)
+		rank_lbl.add_theme_color_override("font_color", Palette.HEADING)
+		hbox.add_child(rank_lbl)
+		var sw := ColorRect.new()
+		sw.custom_minimum_size = Vector2(10, 22)
+		sw.color = GameTypes.PLAYER_COLORS[pid]
+		hbox.add_child(sw)
+		var seat_kind := "AI"
+		if pid < session.seats.size() and not session.seats[pid].is_ai():
+			seat_kind = "Human"
+		var name_lbl := Label.new()
+		name_lbl.text = "%s (%s)" % [str(row["name"]), seat_kind]
+		name_lbl.custom_minimum_size = Vector2(150, 0)
+		name_lbl.add_theme_font_size_override("font_size", 14)
+		name_lbl.add_theme_color_override("font_color", Palette.TEXT)
+		hbox.add_child(name_lbl)
+		var vp_lbl := Label.new()
+		vp_lbl.text = "%d VP" % int(row["vp"])
+		vp_lbl.custom_minimum_size = Vector2(56, 0)
+		vp_lbl.add_theme_font_size_override("font_size", 14)
+		vp_lbl.add_theme_color_override("font_color", Palette.HEADING)
+		hbox.add_child(vp_lbl)
+		var s_n := int(row["settlements"])
+		var c_n := int(row["cities"])
+		var city_word := "city" if c_n == 1 else "cities"
+		var detail := "%d settlement%s · %d %s" % [s_n, "" if s_n == 1 else "s", c_n, city_word]
+		if bool(row["longest_route"]):
+			detail += " | Longest Route"
+		if bool(row["largest_guard"]):
+			detail += " | Largest Guard"
+		var ch_n := int(row["charters"])
+		if ch_n > 0:
+			detail += " | %d Charter point%s" % [ch_n, "" if ch_n == 1 else "s"]
+		var detail_lbl := Label.new()
+		detail_lbl.text = detail
+		detail_lbl.add_theme_font_size_override("font_size", 12)
+		detail_lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+		hbox.add_child(detail_lbl)
+	_splash_overlay.visible = true
+	_results_btn.visible = false
+	_splash_new_game_btn.grab_focus()
+
 func _show_lobby() -> void:
 	for i in range(_seat_type_opts.size()):
 		var sel_type: int = 0 if i == 0 else _settings_ai_difficulty
 		_seat_type_opts[i].select(_seat_type_opts[i].get_item_index(sel_type))
 	_update_lobby_seat_rows()
 	_lobby_cancel_btn.visible = session != null and session.state != null
+	if _splash_overlay != null:
+		_splash_overlay.visible = false
 	_show_overlay("lobby")
 
 func _step_bot_now() -> void:
@@ -1113,6 +1331,19 @@ func _build_settings_overlay() -> void:
 		_save_settings()
 	)
 	_add_settings_row(vbox, "Motion:", "Dice and cards animate instantly when reduced", _settings_motion_check)
+
+	_settings_portnames_check = CheckBox.new()
+	_settings_portnames_check.text = "Show port names"
+	_settings_portnames_check.tooltip_text = "Keep the '2:1 Fleece' text labels on the ports visible"
+	_style_check(_settings_portnames_check)
+	_settings_portnames_check.toggled.connect(func(on: bool) -> void:
+		_show_port_names = on
+		if _board_view != null:
+			_board_view.show_port_names = on
+			_board_view.queue_redraw()
+		_save_settings()
+	)
+	_add_settings_row(vbox, "Ports:", "Show the text name of each port", _settings_portnames_check)
 
 	_settings_auto_check = CheckBox.new()
 	_settings_auto_check.text = "Bots play automatically"
@@ -1258,6 +1489,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_settings_overlay.visible = false
 		elif _lobby_overlay != null and _lobby_overlay.visible:
 			_close_overlays()
+		elif _costs_popup != null and _costs_popup.visible:
+			_close_costs_popup()
+		elif _steal_chooser != null and _steal_chooser.visible:
+			_cancel_steal_chooser()
 		elif _build_bubble != null and _build_bubble.visible:
 			_cancel_build_bubble()
 		elif _trade_tray != null and _trade_tray.visible:
@@ -1278,6 +1513,37 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if _hand_hidden():
 		return
+
+	if _steal_chooser != null and _steal_chooser.visible:
+		if k.keycode >= KEY_1 and k.keycode <= KEY_9:
+			var idx: int = k.keycode - KEY_1
+			if idx < _steal_victims.size():
+				_on_steal_victim_pressed(idx)
+				get_viewport().set_input_as_handled()
+		return
+
+	if _discard_mode_active():
+		if k.keycode == KEY_ENTER or k.keycode == KEY_KP_ENTER:
+			if not _discard_confirm_btn.disabled:
+				_on_discard_confirm_pressed()
+				get_viewport().set_input_as_handled()
+				return
+			return
+		var slot := -1
+		match k.keycode:
+			KEY_1, KEY_KP_1: slot = 0
+			KEY_2, KEY_KP_2: slot = 1
+			KEY_3, KEY_KP_3: slot = 2
+			KEY_4, KEY_KP_4: slot = 3
+			KEY_5, KEY_KP_5: slot = 4
+		if slot != -1:
+			var slot_res: int = GameTypes.ALL_RESOURCES[slot]
+			if k.shift_pressed or k.alt_pressed:
+				_discard_take_back(slot_res)
+			else:
+				_discard_pick_one(slot_res)
+			get_viewport().set_input_as_handled()
+			return
 
 	match k.keycode:
 		KEY_SPACE, KEY_R:
@@ -1318,6 +1584,7 @@ func _load_settings() -> void:
 	_settings_speed_idx = clampi(int(cfg.get_value("settings", "bot_speed", 1)), 0, 2)
 	_reduce_motion = bool(cfg.get_value("settings", "reduce_motion", false))
 	auto_ai = bool(cfg.get_value("settings", "auto_ai", true))
+	_show_port_names = bool(cfg.get_value("settings", "port_names", false))
 
 func _save_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -1327,6 +1594,7 @@ func _save_settings() -> void:
 	cfg.set_value("settings", "bot_speed", _settings_speed_idx)
 	cfg.set_value("settings", "reduce_motion", _reduce_motion)
 	cfg.set_value("settings", "auto_ai", auto_ai)
+	cfg.set_value("settings", "port_names", _show_port_names)
 	cfg.save(settings_path)
 
 func _apply_settings() -> void:
@@ -1338,11 +1606,14 @@ func _apply_settings() -> void:
 		_dice_widget.set_motion_enabled(not _reduce_motion)
 	if _board_view != null:
 		_board_view.reduce_motion = _reduce_motion
+		_board_view.show_port_names = _show_port_names
+		_board_view.anim_scale = 0.45 if _settings_speed_idx >= 2 else 1.0
 	_settings_diff_opt.select(_settings_diff_opt.get_item_index(_settings_ai_difficulty))
 	_settings_text_opt.select(_settings_text_idx)
 	_settings_speed_opt.select(_settings_speed_idx)
 	_settings_mute_check.button_pressed = _settings_muted
 	_settings_motion_check.button_pressed = _reduce_motion
+	_settings_portnames_check.button_pressed = _show_port_names
 	_settings_auto_check.button_pressed = auto_ai
 	_settings_step_btn.visible = not auto_ai
 	_step_top_btn.visible = not auto_ai
@@ -1384,7 +1655,98 @@ func _start_match_from_lobby_settings() -> void:
 	_prev_view_pid = -1
 	_sfx_prev_current = -1
 	_sfx_won = false
+	_last_steal_serial = 0
+	_splash_shown = false
 	session.start_match(seed_val, configs, _balanced_check.button_pressed)
+
+func _build_toast_layer() -> void:
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.offset_top = 44
+	add_child(center)
+	_toast_layer = VBoxContainer.new()
+	_toast_layer.add_theme_constant_override("separation", 4)
+	_toast_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.add_child(_toast_layer)
+
+func _show_toast(text: String, colour: Color, seconds: float = 3.0) -> void:
+	if _toast_layer == null:
+		return
+	var panel := PanelContainer.new()
+	var st := _paper_panel_style(true)
+	st.set_corner_radius_all(8)
+	st.set_border_width_all(2)
+	st.border_color = colour.darkened(0.15)
+	st.shadow_color = Palette.PAPER_SHADOW
+	st.shadow_size = 4
+	st.content_margin_left = 10
+	st.content_margin_right = 10
+	st.content_margin_top = 4
+	st.content_margin_bottom = 4
+	panel.add_theme_stylebox_override("panel", st)
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var label := Label.new()
+	label.text = text
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_color_override("font_color", colour)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(label)
+	_toast_layer.add_child(panel)
+	_toast_labels.append(label)
+	while _toast_layer.get_child_count() > 3:
+		var oldest := _toast_layer.get_child(0)
+		if oldest == panel:
+			break
+		_toast_layer.remove_child(oldest)
+		if oldest.get_child_count() > 0:
+			_toast_labels.erase(oldest.get_child(0))
+		oldest.queue_free()
+	var tw := panel.create_tween()
+	tw.tween_interval(maxf(0.5, seconds))
+	tw.tween_property(panel, "modulate:a", 0.0, 0.45)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(label):
+			_toast_labels.erase(label)
+		if is_instance_valid(panel):
+			panel.queue_free()
+	)
+
+func _announce_steal(state: GameState) -> void:
+	if session == null or state == null:
+		return
+	var serial := int(state.last_steal.get("serial", 0))
+	if serial <= _last_steal_serial:
+		return
+	_last_steal_serial = serial
+	var thief := int(state.last_steal.get("thief", -1))
+	var victim := int(state.last_steal.get("victim", -1))
+	if thief < 0 or victim < 0 or thief >= state.players.size() or victim >= state.players.size():
+		return
+	var thief_name := str(state.players[thief].get("name", GameTypes.PLAYER_NAMES[thief]))
+	var victim_name := str(state.players[victim].get("name", GameTypes.PLAYER_NAMES[victim]))
+	var v := _view_pid()
+	if thief == victim:
+		return
+	if victim == v:
+		var private := _human_seat_count() <= 1 or not _hand_hidden()
+		if private:
+			var res := int(state.last_steal.get("res", -1))
+			_show_toast("%s stole 1 %s from you!" % [thief_name, GameTypes.resource_name(res)], Color(0.55, 0.18, 0.14), 3.5)
+		else:
+			_show_toast("%s stole a card from you!" % thief_name, Color(0.55, 0.18, 0.14), 3.5)
+		if _sfx != null:
+			_sfx.play("seven")
+	elif thief == v:
+		if _human_seat_count() <= 1:
+			var res2 := int(state.last_steal.get("res", -1))
+			_show_toast("You stole 1 %s from %s." % [GameTypes.resource_name(res2), victim_name], Color(0.18, 0.42, 0.2), 3.5)
+		else:
+			_show_toast("You stole a card from %s." % victim_name, Color(0.18, 0.42, 0.2), 3.5)
+	else:
+		_show_toast("%s stole a card from %s." % [thief_name, victim_name], Palette.ACCENT_GOLD.darkened(0.25))
+	_fly_card_back(victim, thief)
 
 func _on_state_updated(state: GameState, events: Array[String]) -> void:
 	_board_view.set_state(state)
@@ -1396,6 +1758,12 @@ func _on_state_updated(state: GameState, events: Array[String]) -> void:
 		if ev.contains("traded "):
 			traded_now = true
 			_board_view.spawn_trade_toast(ev)
+			if ev.contains(" to ") and ev.contains(" for "):
+				var a := str(ev.split(" traded ")[0])
+				var b := str(ev.split(" to ")[1].split(" for ")[0])
+				_show_toast("%s traded with %s." % [a, b], Palette.ACCENT_GOLD.darkened(0.25))
+		elif ev.ends_with("withdrew the offer."):
+			_show_toast(str(ev.split(" withdrew")[0]) + " withdrew the offer.", Color(0.45, 0.35, 0.2))
 		if ev.contains("rolled "):
 			rolled_now = true
 		if ev.contains(" built a ") or ev.contains("upgraded "):
@@ -1427,13 +1795,128 @@ func _on_state_updated(state: GameState, events: Array[String]) -> void:
 		if turn_changed and state.current_player >= 0 and state.current_player < session.seats.size() and not session.seats[state.current_player].is_ai() and state.phase != GameTypes.TurnPhase.GAME_OVER:
 			_sfx.play("turn")
 
+	_animate_from_events(events, state)
+	_announce_steal(state)
+	if state.phase == GameTypes.TurnPhase.GAME_OVER and not _splash_shown:
+		_show_splash(state)
+	_prev_blocker_tile = state.blocker_tile
 	_refresh_ui()
+
+func _animate_from_events(events: Array[String], state: GameState) -> void:
+	if _board_view == null or session == null:
+		return
+	for ev in events:
+		var pid := _event_actor_pid(ev, state)
+		var col: Color = GameTypes.PLAYER_COLORS[pid] if pid >= 0 and pid < GameTypes.PLAYER_COLORS.size() else Palette.ACCENT_GOLD
+		if ev.contains(" at vertex "):
+			var v := _event_int(ev, "vertex ")
+			if v >= 0:
+				_board_view.animate_build_vertex(v, col)
+		elif ev.contains(" to a City"):
+			var v2 := _event_int(ev, "vertex ")
+			if v2 >= 0:
+				_board_view.animate_build_vertex(v2, col)
+		elif ev.contains(" on edge "):
+			var e := _event_int(ev, "edge ")
+			if e >= 0:
+				_board_view.animate_build_edge(e, col)
+		elif ev.contains("moved the Blocker to tile "):
+			var t := _event_int(ev, "tile ")
+			if t >= 0 and _prev_blocker_tile >= 0:
+				_board_view.animate_blocker(_prev_blocker_tile)
+		if pid >= 0 and pid < session.seats.size() and session.seats[pid].is_ai():
+			_maybe_bot_toast(ev, pid, state)
+
+func _event_actor_pid(ev: String, state: GameState) -> int:
+	for p_id in range(state.players.size()):
+		var nm := str(state.players[p_id].get("name", ""))
+		if nm != "" and ev.begins_with(nm + " "):
+			return p_id
+	return -1
+
+func _event_int(ev: String, marker: String) -> int:
+	var idx := ev.find(marker)
+	if idx == -1:
+		return -1
+	var rest := ev.substr(idx + marker.length())
+	var digits := ""
+	for ch in rest:
+		if ch >= "0" and ch <= "9":
+			digits += ch
+		else:
+			break
+	return digits.to_int() if digits != "" else -1
+
+func _maybe_bot_toast(ev: String, pid: int, state: GameState) -> void:
+	if ev.contains("stole") or ev.contains("withdrew") or (ev.contains("traded ") and ev.contains(" to ")):
+		return
+	var nm := str(state.players[pid].get("name", GameTypes.PLAYER_NAMES[pid]))
+	var col: Color = GameTypes.PLAYER_COLORS[pid]
+	var t := ""
+	if ev.contains("built a settlement at vertex"):
+		t = nm + " built a settlement"
+	elif ev.contains("placed a starting settlement"):
+		t = nm + " claimed a starting settlement"
+	elif ev.contains(" to a City"):
+		t = nm + " upgraded to a City"
+	elif ev.contains("placed a starting road"):
+		t = nm + " built a road"
+	elif ev.contains("road on edge"):
+		t = nm + (" built a free road" if ev.contains("free road") else " built a road")
+	elif ev.contains("bought an Action Card"):
+		t = nm + " bought an Action Card"
+	elif ev.contains("played a Guard"):
+		t = nm + " played a Guard"
+	elif ev.contains("played Road Work"):
+		t = nm + " played Road Work"
+	elif ev.contains("played Harvest Bounty"):
+		t = nm + " played Harvest Bounty"
+	elif ev.contains("played Trade Decree"):
+		t = nm + " played Trade Decree"
+	elif ev.contains("moved the Blocker"):
+		t = nm + " moved the Blocker"
+	elif ev.contains(":1)") and ev.contains(" for 1 "):
+		t = nm + " traded with the bank"
+	if t != "":
+		_show_toast(t, col.darkened(0.2), 2.0)
+
+func _fly_anchor(pid: int) -> Vector2:
+	if pid == _view_pid() and _hand_bar_panel != null and _hand_bar_panel.visible:
+		return _hand_bar_panel.get_global_rect().get_center()
+	var row: Control = _scoreboard_row_panels.get(pid, null)
+	if row != null and row.visible and row.is_inside_tree():
+		return row.get_global_rect().get_center()
+	return Vector2.INF
+
+func _fly_card_back(from_pid: int, to_pid: int) -> void:
+	if _reduce_motion:
+		return
+	var from := _fly_anchor(from_pid)
+	var to := _fly_anchor(to_pid)
+	if from == Vector2.INF or to == Vector2.INF:
+		return
+	var f := CardFace.new()
+	f.kind = "back"
+	f.focusable = false
+	f.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	f.custom_minimum_size = Vector2(30, 30.0 / CardFace.RATIO)
+	add_child(f)
+	f.size = Vector2(30, 42)
+	f.pivot_offset = f.size * 0.5
+	f.position = from - f.size * 0.5
+	var dur := 0.6 * (0.45 if _settings_speed_idx >= 2 else 1.0)
+	var tw := f.create_tween()
+	tw.tween_property(f, "position", to - f.size * 0.5, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(f, "rotation_degrees", 14.0, dur)
+	tw.tween_property(f, "modulate:a", 0.0, 0.18)
+	tw.tween_callback(f.queue_free)
 
 func _spawn_production_popups(state: GameState) -> void:
 	if _board_view == null:
 		return
 	var total: int = state.last_dice.x + state.last_dice.y
 	var topo := HexMath.get_topology()
+	var view_pid := _view_pid()
 	for t_id in range(state.tile_terrains.size()):
 		if t_id == state.blocker_tile:
 			continue
@@ -1443,16 +1926,23 @@ func _spawn_production_popups(state: GameState) -> void:
 		if res < 0:
 			continue
 		var produced := 0
+		var view_prod := 0
 		if t_id < topo.tile_vertices.size():
 			for v_id in topo.tile_vertices[t_id]:
 				if v_id >= 0 and v_id < state.vertex_owner.size() and state.vertex_owner[v_id] >= 0:
 					var b_type: int = state.vertex_building[v_id] if v_id < state.vertex_building.size() else GameTypes.BuildingType.NONE
+					var gain := 0
 					if b_type == GameTypes.BuildingType.SETTLEMENT:
-						produced += 1
+						gain = 1
 					elif b_type == GameTypes.BuildingType.CITY:
-						produced += 2
+						gain = 2
+					produced += gain
+					if state.vertex_owner[v_id] == view_pid:
+						view_prod += gain
 		if produced > 0:
 			_board_view.spawn_tile_resource_popup(t_id, res, produced)
+			if view_prod > 0 and not _hand_hidden():
+				_board_view.spawn_tile_resource_card_fly(t_id, res)
 
 func _on_action_rejected(player_id: int, error: String) -> void:
 	_append_log("[color=#7a2a20][Seat %d Invalid Action] %s[/color]" % [player_id + 1, error])
@@ -1519,11 +2009,16 @@ func _submit_human_action(action: Dictionary) -> void:
 
 # A mouse click on an action button must not leave keyboard focus on it,
 # otherwise the next Space would activate the button instead of rolling.
-func _guard_action_button_focus(btn: Button) -> void:
+func _guard_action_button_focus(btn: Control) -> void:
 	_no_space_focus_btns.append(btn)
-	btn.button_up.connect(func() -> void:
-		btn.release_focus()
-	)
+	if btn is Button:
+		(btn as Button).button_up.connect(func() -> void:
+			btn.release_focus()
+		)
+	else:
+		btn.focus_exited.connect(func() -> void:
+			pass
+		)
 
 func _build_device_pass_cover() -> void:
 	_device_pass_cover = PanelContainer.new()
@@ -1679,6 +2174,19 @@ func _refresh_ui() -> void:
 	var acting_id := session.get_acting_player_id()
 	var human_acting := _is_human_acting()
 
+	# Discard picker first, so every later section sees a fresh discard state
+	var needs_discard := (
+		state.phase == GameTypes.TurnPhase.TURN_DISCARD
+		and state.pending_discards.has(acting_id)
+		and human_acting
+	)
+	_refresh_discard_picker(state, acting_id, needs_discard, _hand_hidden())
+	_refresh_bank_section(state)
+
+	if _steal_chooser != null and _steal_chooser.visible:
+		if not human_acting or _hand_hidden() or _board_view.interaction_mode != BoardView.InteractionMode.PICK_BLOCKER_TILE:
+			_close_steal_chooser()
+
 	# Top bar: muted turn counter + one-line instruction banner
 	_phase_label.text = "Turn %d" % state.turn_number
 	if _board_view.interaction_mode == BoardView.InteractionMode.NONE and not _pending_guard_card:
@@ -1708,7 +2216,15 @@ func _refresh_ui() -> void:
 		var is_active := (p_id == acting_id and state.phase != GameTypes.TurnPhase.GAME_OVER)
 		var card_bg: Color = Palette.PANEL_BG_ALT if is_active else Palette.PANEL_BG
 		var card := _make_compact_card(card_bg)
+		if is_active:
+			var act_sb = card.get_theme_stylebox("panel")
+			if act_sb is StyleBoxFlat:
+				var act2 := (act_sb as StyleBoxFlat).duplicate()
+				act2.set_border_width_all(3)
+				act2.border_color = GameTypes.PLAYER_COLORS[p_id]
+				card.add_theme_stylebox_override("panel", act2)
 		_scoreboard_box.add_child(card)
+		_scoreboard_row_panels[p_id] = card
 
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 6)
@@ -1720,7 +2236,7 @@ func _refresh_ui() -> void:
 		row.add_child(swatch)
 
 		var name_lbl := Label.new()
-		name_lbl.text = str(p_data.get("name", GameTypes.PLAYER_NAMES[p_id]))
+		name_lbl.text = ("▶ " if is_active else "") + str(p_data.get("name", GameTypes.PLAYER_NAMES[p_id]))
 		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_lbl.add_theme_font_size_override("font_size", 13)
 		name_lbl.add_theme_color_override("font_color", Palette.TEXT)
@@ -1739,7 +2255,10 @@ func _refresh_ui() -> void:
 
 		var hand_cnt := GameTypes.hand_total(p_data.get("hand", {}))
 		var dev_cnt: int = p_data.get("dev_cards", []).size() + p_data.get("new_dev_cards", []).size()
-		row.add_child(_make_pill("%d/%d cards" % [hand_cnt, dev_cnt], Color(Palette.SEA, 0.35), Palette.TEXT))
+		var mini_hand := MiniHandStack.new()
+		row.add_child(mini_hand)
+		mini_hand.res_count = hand_cnt
+		mini_hand.act_count = dev_cnt
 
 		if state.longest_route_holder == p_id:
 			row.add_child(_make_pill("Route +2", Color(Palette.ACCENT_GREEN, 0.40), Palette.TEXT))
@@ -1757,23 +2276,22 @@ func _refresh_ui() -> void:
 	var dash_player: Dictionary = state.players[dash_pid]
 	var hand: Dictionary = dash_player.get("hand", {})
 
-	# Visual bottom hand bar refresh
+	# Visual bottom hand bar refresh (discard display always derived from state)
 	var pid_changed := (dash_pid != _prev_dash_pid)
+	var discard_badges := needs_discard and (not hand_hidden)
 	for r in GameTypes.ALL_RESOURCES:
-		var refs: Dictionary = _res_card_refs.get(r, {})
-		if refs.is_empty():
+		var face: CardFace = _res_card_refs.get(r, null)
+		if face == null:
 			continue
-		var count_lbl: Label = refs["count"]
-		var card: Control = refs["card"]
+		face.hidden_card = hand_hidden
 		if hand_hidden:
-			count_lbl.text = "—"
-			card.modulate.a = 0.5
+			face.count = 0
+			face.badge = 0
 			continue
-		var cnt := int(hand.get(r, 0))
-		count_lbl.text = "x%d" % cnt
-		card.modulate.a = 1.0 if cnt > 0 else 0.45
-		if not pid_changed and cnt > int(_prev_dash_hand.get(r, 0)):
-			_pulse_card(card)
+		face.count = int(hand.get(r, 0))
+		face.badge = int(_discard_pick.get(r, 0)) if discard_badges else 0
+		if not pid_changed and face.count > int(_prev_dash_hand.get(r, 0)):
+			_pulse_card(face)
 	_prev_dash_hand = {} if hand_hidden else hand.duplicate()
 	_prev_dash_pid = dash_pid
 
@@ -1810,18 +2328,17 @@ func _refresh_ui() -> void:
 		GameTypes.DevCardType.CHARTER_POINT: "Charter",
 	}
 	for ctype in chip_names.keys():
-		var chip: Button = _action_chips.get(ctype, null)
+		var chip: CardFace = _action_chips.get(ctype, null)
 		if chip == null:
 			continue
+		chip.hidden_card = false
 		var ccnt: int = int(card_counts.get(ctype, 0))
-		var chip_label := "%s x%d" % [chip_names[ctype], ccnt]
+		chip.count = ccnt
 		if ctype == GameTypes.DevCardType.CHARTER_POINT:
-			chip.text = chip_label
 			chip.disabled = true
 			chip.tooltip_text = "Charter Point: a hidden victory point — never playable"
 			continue
 		if ccnt <= 0:
-			chip.text = chip_label
 			chip.disabled = true
 			chip.tooltip_text = "You have no %s card" % str(chip_names[ctype])
 			continue
@@ -1831,30 +2348,19 @@ func _refresh_ui() -> void:
 				new_cnt += 1
 		var chk: Dictionary = RulesEngine.can_play_dev_card(state, dash_pid, int(ctype))
 		var chk_ok := bool(chk.get("ok", false))
-		if new_cnt > 0:
-			chip_label += " (new)"
-		chip.text = chip_label
 		chip.disabled = not chk_ok
-		chip.tooltip_text = "Play %s" % str(chip_names[ctype]) if chk_ok else str(chk.get("reason", ""))
+		var tip := "Play %s" % str(chip_names[ctype])
+		if new_cnt > 0:
+			tip += " (new this turn)"
+		chip.tooltip_text = tip if chk_ok else str(chk.get("reason", ""))
 	if hand_hidden:
 		for ctype in _action_chips.keys():
-			var hidden_chip: Button = _action_chips[ctype]
+			var hidden_chip: CardFace = _action_chips[ctype]
+			hidden_chip.hidden_card = true
 			hidden_chip.disabled = true
-			hidden_chip.text = "Hidden"
 			hidden_chip.tooltip_text = ""
 
 	_refresh_subpanels(state, acting_id, human_acting)
-
-	# Discard check
-	var needs_discard := (
-		state.phase == GameTypes.TurnPhase.TURN_DISCARD
-		and state.pending_discards.has(acting_id)
-		and human_acting
-	)
-	_discard_panel.visible = needs_discard
-	if needs_discard:
-		var req_cnt: int = int(state.pending_discards[acting_id])
-		_discard_info_label.text = "Rolled 7! %s must discard %d cards." % [GameTypes.PLAYER_NAMES[acting_id], req_cnt]
 
 	# Auto board highlights for mandatory placement phases
 	_update_mandatory_board_highlights(state, acting_id, human_acting)
@@ -1912,6 +2418,7 @@ func _refresh_ui() -> void:
 		_trade_btn.tooltip_text = "Open the trade panel (T)"
 	else:
 		_trade_btn.tooltip_text = _blocked_reason(state, human_acting)
+	_refresh_offer_strip(state)
 	_refresh_trade_tray(state, acting_id, human_acting)
 	if not state.open_trade.is_empty() and human_acting:
 		if _board_view.interaction_mode == BoardView.InteractionMode.NONE and not _pending_guard_card:
@@ -1936,62 +2443,6 @@ func _refresh_ui() -> void:
 	else:
 		_buy_card_btn.tooltip_text = _blocked_reason(state, human_acting)
 
-	_refresh_build_rows(state, acting_id, human_acting, in_main, hand)
-
-func _refresh_build_rows(state: GameState, acting_id: int, human_acting: bool, in_main: bool, hand: Dictionary) -> void:
-	for key in _build_rows.keys():
-		var refs: Dictionary = _build_rows[key]
-		var btn: Button = refs["btn"]
-		var marker: Label = refs["marker"]
-		var cost: Dictionary = refs["cost"]
-		var display_name: String = str(refs["name"])
-		var enabled := false
-		var reason := ""
-		if not human_acting:
-			reason = "Not your turn"
-		elif not in_main:
-			reason = _blocked_reason(state, human_acting)
-		else:
-			if not RulesEngine.can_afford(state, acting_id, key):
-				reason = _missing_resources(hand, cost)
-			else:
-				var p: Dictionary = state.players[acting_id]
-				var no_spot := false
-				match key:
-					"road":
-						if int(p.get("roads_left", 0)) <= 0:
-							reason = "No roads left"
-						else:
-							no_spot = RulesEngine.get_valid_road_edges(state, acting_id, -1).is_empty()
-					"settlement":
-						if int(p.get("settlements_left", 0)) <= 0:
-							reason = "No settlements left"
-						else:
-							no_spot = RulesEngine.get_valid_settlement_vertices(state, acting_id, false).is_empty()
-					"city":
-						if int(p.get("cities_left", 0)) <= 0:
-							reason = "No cities left"
-						else:
-							no_spot = RulesEngine.get_valid_city_vertices(state, acting_id).is_empty()
-				if no_spot and reason.is_empty():
-					reason = "No free spot"
-				elif reason.is_empty():
-					enabled = true
-		btn.disabled = not enabled
-		if enabled:
-			marker.text = "✓"
-			btn.tooltip_text = "Build a %s: click, then click a highlighted spot on the board" % display_name
-		else:
-			marker.text = ""
-			btn.tooltip_text = reason
-		var row_lbls: Array = refs["labels"]
-		for lb in row_lbls:
-			var row_lbl: Label = lb
-			if enabled:
-				row_lbl.add_theme_color_override("font_color", Palette.TEXT)
-			else:
-				row_lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
-		_apply_build_row_style(btn, enabled)
 
 func _update_mandatory_board_highlights(state: GameState, acting_id: int, human_acting: bool) -> void:
 	if not human_acting:
@@ -2177,8 +2628,7 @@ func _fill_build_bubble(kind: String) -> void:
 		"city":
 			title = "Upgrade to city?"
 	_build_bubble_title.text = title
-	var refs: Dictionary = _build_rows.get(kind, {})
-	var cost: Dictionary = refs.get("cost", {})
+	var cost := _build_cost_for(kind)
 	for r in GameTypes.ALL_RESOURCES:
 		var amt: int = int(cost.get(r, 0))
 		if amt <= 0:
@@ -2243,31 +2693,127 @@ func _on_board_edge_clicked(edge_id: int) -> void:
 	if _board_view.interaction_mode == BoardView.InteractionMode.PICK_ROAD:
 		_submit_human_action(GameAction.place_road(edge_id))
 
+func _on_board_background_clicked() -> void:
+	_close_costs_popup()
+	if _trade_tray != null and _trade_tray.visible:
+		_close_trade_tray_by_user()
+
 func _on_board_tile_clicked(tile_id: int) -> void:
 	if not _is_human_acting() or _hand_hidden():
 		return
 	if _board_view.interaction_mode == BoardView.InteractionMode.PICK_BLOCKER_TILE:
 		var acting_id := session.get_acting_player_id()
-		var target_opp := _choose_steal_target_on_tile(session.state, acting_id, tile_id)
+		if _steal_chooser != null and _steal_chooser.visible:
+			return
+		var victims: Array[int] = RulesEngine.get_steal_victims(session.state, acting_id, tile_id)
+		if victims.size() >= 2:
+			_open_steal_chooser(tile_id, victims)
+			return
+		var target_opp: int = victims[0] if victims.size() == 1 else -1
 		if _pending_guard_card:
 			_submit_human_action(GameAction.play_guard(tile_id, target_opp))
 		else:
 			_submit_human_action(GameAction.move_blocker(tile_id, target_opp))
 
-func _choose_steal_target_on_tile(state: GameState, acting_id: int, tile_id: int) -> int:
-	var topo := HexMath.get_topology()
-	var best_opp := -1
-	var best_vp := -1
-	for v_id in topo.tile_vertices[tile_id]:
-		var owner_id: int = state.vertex_owner[v_id]
-		if owner_id != -1 and owner_id != acting_id:
-			var opp_hand: Dictionary = state.players[owner_id].get("hand", {})
-			if GameTypes.hand_total(opp_hand) > 0:
-				var vp := state.get_victory_points(owner_id, false)
-				if vp > best_vp:
-					best_vp = vp
-					best_opp = owner_id
-	return best_opp
+func _build_steal_chooser() -> void:
+	_steal_chooser = PanelContainer.new()
+	var st := _paper_panel_style(true)
+	st.set_corner_radius_all(9)
+	st.set_border_width_all(2)
+	st.border_color = Palette.ACCENT_GOLD.darkened(0.15)
+	st.shadow_color = Palette.PAPER_SHADOW
+	st.shadow_size = 5
+	st.content_margin_left = 8
+	st.content_margin_right = 8
+	st.content_margin_top = 6
+	st.content_margin_bottom = 6
+	_steal_chooser.add_theme_stylebox_override("panel", st)
+	_steal_chooser.visible = false
+	add_child(_steal_chooser)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 4)
+	_steal_chooser.add_child(col)
+	var heading := Label.new()
+	heading.text = "Steal from whom?"
+	heading.add_theme_font_size_override("font_size", 13)
+	heading.add_theme_color_override("font_color", Palette.HEADING)
+	col.add_child(heading)
+	_steal_chooser_rows = VBoxContainer.new()
+	_steal_chooser_rows.add_theme_constant_override("separation", 3)
+	col.add_child(_steal_chooser_rows)
+
+func _open_steal_chooser(tile_id: int, victims: Array[int]) -> void:
+	_steal_pending = {"tile_id": tile_id, "guard": _pending_guard_card}
+	_steal_victims = victims.duplicate()
+	for c in _steal_chooser_rows.get_children():
+		c.queue_free()
+	_steal_victim_btns.clear()
+	for i in range(victims.size()):
+		var pid: int = victims[i]
+		var hand_n: int = GameTypes.hand_total(session.state.players[pid]["hand"])
+		var b := Button.new()
+		b.text = ""
+		b.custom_minimum_size = Vector2(230, 34)
+		_style_button(b, "normal")
+		var vrow := HBoxContainer.new()
+		vrow.add_theme_constant_override("separation", 7)
+		vrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		b.add_child(vrow)
+		var vsw := ColorRect.new()
+		vsw.custom_minimum_size = Vector2(10, 20)
+		vsw.color = GameTypes.PLAYER_COLORS[pid]
+		vsw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		vrow.add_child(vsw)
+		var vlbl := Label.new()
+		vlbl.text = "%d. %s — %d card%s" % [i + 1, str(session.state.players[pid].get("name", GameTypes.PLAYER_NAMES[pid])), hand_n, "" if hand_n == 1 else "s"]
+		vlbl.add_theme_font_size_override("font_size", 13)
+		vlbl.add_theme_color_override("font_color", Palette.TEXT)
+		vlbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		vrow.add_child(vlbl)
+		b.pressed.connect(_on_steal_victim_pressed.bind(i))
+		_guard_action_button_focus(b)
+		_steal_chooser_rows.add_child(b)
+		_steal_victim_btns.append(b)
+	_position_steal_chooser()
+	_steal_chooser.visible = true
+	if not _steal_victim_btns.is_empty():
+		_steal_victim_btns[0].grab_focus()
+	_set_banner("Choose who to steal from — keys 1-%d, Esc picks another tile" % victims.size())
+
+func _position_steal_chooser() -> void:
+	_steal_chooser.reset_size()
+	var bsize := _steal_chooser.get_combined_minimum_size()
+	var spot := _board_view.global_position + _board_view.get_spot_screen_position("tile", int(_steal_pending.get("tile_id", -1)))
+	var pos := spot - bsize * 0.5
+	var br := _board_view.get_global_rect()
+	pos.x = clampf(pos.x, br.position.x + 2, br.end.x - bsize.x - 2)
+	pos.y = clampf(pos.y, br.position.y + 2, br.end.y - bsize.y - 2)
+	_steal_chooser.position = pos
+
+func _on_steal_victim_pressed(index: int) -> void:
+	if _steal_pending.is_empty() or not _is_human_acting() or _hand_hidden():
+		return
+	if index < 0 or index >= _steal_victims.size():
+		return
+	var tile_id := int(_steal_pending.get("tile_id", -1))
+	var victim: int = _steal_victims[index]
+	var guard := bool(_steal_pending.get("guard", false))
+	_close_steal_chooser()
+	if guard:
+		_submit_human_action(GameAction.play_guard(tile_id, victim))
+	else:
+		_submit_human_action(GameAction.move_blocker(tile_id, victim))
+
+func _close_steal_chooser() -> void:
+	_steal_pending = {}
+	_steal_victims = []
+	_steal_victim_btns.clear()
+	if _steal_chooser != null:
+		_steal_chooser.visible = false
+
+func _cancel_steal_chooser() -> void:
+	_close_steal_chooser()
+	_refresh_ui()
 
 # Toolbar button handlers
 func _on_roll_pressed() -> void:
@@ -2275,33 +2821,6 @@ func _on_roll_pressed() -> void:
 
 func _on_end_turn_pressed() -> void:
 	_submit_human_action(GameAction.end_turn())
-
-func _on_build_road_pressed() -> void:
-	if not _is_human_acting() or _hand_hidden():
-		return
-	var acting_id := session.get_acting_player_id()
-	var edges := RulesEngine.get_valid_road_edges(session.state, acting_id, -1)
-	_board_view.set_highlights(BoardView.InteractionMode.PICK_ROAD, [], edges, [])
-	_cancel_pick_btn.visible = true
-	_set_banner("Select a highlighted edge on the board to build a Road.")
-
-func _on_build_settlement_pressed() -> void:
-	if not _is_human_acting() or _hand_hidden():
-		return
-	var acting_id := session.get_acting_player_id()
-	var verts := RulesEngine.get_valid_settlement_vertices(session.state, acting_id, false)
-	_board_view.set_highlights(BoardView.InteractionMode.PICK_SETTLEMENT, verts, [], [])
-	_cancel_pick_btn.visible = true
-	_set_banner("Select a highlighted vertex on the board to build a Settlement.")
-
-func _on_upgrade_city_pressed() -> void:
-	if not _is_human_acting() or _hand_hidden():
-		return
-	var acting_id := session.get_acting_player_id()
-	var verts := RulesEngine.get_valid_city_vertices(session.state, acting_id)
-	_board_view.set_highlights(BoardView.InteractionMode.PICK_CITY, verts, [], [])
-	_cancel_pick_btn.visible = true
-	_set_banner("Select one of your highlighted Settlements to upgrade to a City.")
 
 func _on_buy_dev_pressed() -> void:
 	_submit_human_action(GameAction.buy_dev_card())
@@ -2327,15 +2846,127 @@ func _on_play_bounty_pressed() -> void:
 func _on_play_decree_pressed() -> void:
 	_on_toggle_decree_panel()
 
-func _on_auto_discard_pressed() -> void:
-	if not _is_human_acting() or _hand_hidden():
+func _discard_mode_active() -> bool:
+	if session == null or session.state == null:
+		return false
+	return (
+		_discard_mode_box != null
+		and _discard_mode_box.visible
+		and not _hand_hidden()
+	)
+
+func _refresh_bank_section(state: GameState) -> void:
+	if _bank_faces.is_empty() or state == null:
+		return
+	var supply := float(GameState.TOTAL_RESOURCE_SUPPLY)
+	for r in GameTypes.ALL_RESOURCES:
+		var bf: CardFace = _bank_faces.get(r, null)
+		if bf == null:
+			continue
+		var cnt := int(state.bank.get(r, 0))
+		bf.count = cnt
+		bf.stack_depth = clampi(int(ceil(float(cnt) / supply * 4.0)), 0, 4)
+		var blbl: Label = _bank_count_labels.get(r, null)
+		if blbl != null:
+			_set_bank_label(blbl, cnt)
+	if _bank_deck_face != null:
+		var dcnt := state.dev_deck.size()
+		_bank_deck_face.count = dcnt
+		_bank_deck_face.stack_depth = clampi(int(ceil(float(dcnt) / 25.0 * 4.0)), 0, 4)
+		if _bank_deck_label != null:
+			_set_bank_label(_bank_deck_label, dcnt)
+
+func _set_bank_label(lbl: Label, n: int) -> void:
+	var col := Palette.TEXT
+	if n <= 0:
+		col = Palette.TEXT_MUTED
+	elif n <= 4:
+		col = Color(0.68, 0.30, 0.14)
+	lbl.add_theme_color_override("font_outline_color", col)
+	lbl.add_theme_constant_override("outline_size", 2)
+	lbl.add_theme_color_override("font_color", col)
+	lbl.text = str(n) if n > 0 else "empty"
+
+
+func _refresh_discard_picker(state: GameState, acting_id: int, needs_discard: bool, hand_hidden: bool) -> void:
+	if not needs_discard or acting_id != _discard_pick_pid:
+		_discard_pick = {}
+		_discard_pick_pid = acting_id if needs_discard else -1
+	_discard_mode_box.visible = needs_discard
+	for n in _bar_extra_nodes:
+		if is_instance_valid(n):
+			n.visible = not needs_discard
+	if not needs_discard:
+		return
+	var req_cnt := int(state.pending_discards.get(acting_id, 0))
+	var hand: Dictionary = state.players[acting_id].get("hand", {})
+	# cap picks to what is actually in hand (e.g. after viewer changes)
+	for r in GameTypes.ALL_RESOURCES:
+		_discard_pick[r] = clampi(int(_discard_pick.get(r, 0)), 0, int(hand.get(r, 0)))
+	var picked := _discard_picked_total()
+	if picked > req_cnt:
+		_discard_pick = _trim_discard_pick(picked - req_cnt)
+		picked = _discard_picked_total()
+	_discard_heading.text = "Discard %d cards (picked %d of %d)" % [req_cnt, picked, req_cnt]
+	_discard_confirm_btn.disabled = picked != req_cnt or hand_hidden
+	_discard_auto_btn.disabled = hand_hidden
+
+func _discard_picked_total() -> int:
+	var total := 0
+	for r in GameTypes.ALL_RESOURCES:
+		total += int(_discard_pick.get(r, 0))
+	return total
+
+func _trim_discard_pick(excess: int) -> Dictionary:
+	var trimmed := _discard_pick.duplicate()
+	for r in GameTypes.ALL_RESOURCES:
+		if excess <= 0:
+			break
+		var have := int(trimmed.get(r, 0))
+		var cut := mini(have, excess)
+		trimmed[r] = have - cut
+		excess -= cut
+	return trimmed
+
+func _discard_pick_one(res: int) -> void:
+	if not _discard_mode_active() or session == null or session.state == null:
 		return
 	var acting_id := session.get_acting_player_id()
-	var req_cnt: int = int(session.state.pending_discards.get(acting_id, 0))
+	var req_cnt := int(session.state.pending_discards.get(acting_id, 0))
+	var hand: Dictionary = session.state.players[acting_id].get("hand", {})
+	if _discard_picked_total() >= req_cnt:
+		return
+	if int(_discard_pick.get(res, 0)) >= int(hand.get(res, 0)):
+		return
+	_discard_pick[res] = int(_discard_pick.get(res, 0)) + 1
+	_refresh_ui()
+
+func _discard_take_back(res: int) -> void:
+	if not _discard_mode_active():
+		return
+	if int(_discard_pick.get(res, 0)) <= 0:
+		return
+	_discard_pick[res] = int(_discard_pick.get(res, 0)) - 1
+	_refresh_ui()
+
+func _on_discard_confirm_pressed() -> void:
+	if not _discard_mode_active() or session == null or session.state == null:
+		return
+	var acting_id := session.get_acting_player_id()
+	var req_cnt := int(session.state.pending_discards.get(acting_id, 0))
+	if _discard_picked_total() != req_cnt:
+		return
+	_submit_human_action(GameAction.discard_resources(_discard_pick.duplicate()))
+
+func _on_discard_auto_fill_pressed() -> void:
+	if not _discard_mode_active() or session == null or session.state == null:
+		return
+	var acting_id := session.get_acting_player_id()
+	var req_cnt := int(session.state.pending_discards.get(acting_id, 0))
 	if req_cnt <= 0:
 		return
 	var hand: Dictionary = session.state.players[acting_id].get("hand", {}).duplicate()
-	var discard := GameTypes.empty_hand()
+	var choice := GameTypes.empty_hand()
 	var remaining := req_cnt
 	while remaining > 0:
 		var best_res := -1
@@ -2348,9 +2979,10 @@ func _on_auto_discard_pressed() -> void:
 		if best_res == -1:
 			break
 		hand[best_res] = int(hand[best_res]) - 1
-		discard[best_res] = int(discard[best_res]) + 1
+		choice[best_res] = int(choice[best_res]) + 1
 		remaining -= 1
-	_submit_human_action(GameAction.discard_resources(discard))
+	_discard_pick = choice
+	_refresh_ui()
 
 func _hide_all_subpanels() -> void:
 	_bounty_box.visible = false
@@ -2382,6 +3014,22 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_trade_content.add_theme_constant_override("separation", 4)
 	_trade_tray.add_child(_trade_content)
+
+	var head_row := HBoxContainer.new()
+	head_row.add_theme_constant_override("separation", 6)
+	_trade_content.add_child(head_row)
+	var head_spacer := Control.new()
+	head_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head_row.add_child(head_spacer)
+	_trade_close_btn = Button.new()
+	_trade_close_btn.text = "✕ Close"
+	_trade_close_btn.tooltip_text = "Close this panel (Esc). Your offer stays open."
+	_trade_close_btn.custom_minimum_size = Vector2(70, 28)
+	_trade_close_btn.add_theme_font_size_override("font_size", 12)
+	_style_button(_trade_close_btn, "ghost")
+	_trade_close_btn.pressed.connect(_close_trade_tray_by_user)
+	_guard_action_button_focus(_trade_close_btn)
+	head_row.add_child(_trade_close_btn)
 
 	_trade_headline = Label.new()
 	_trade_headline.add_theme_font_size_override("font_size", 15)
@@ -2681,10 +3329,18 @@ func _toggle_trade_tray() -> void:
 	_set_trade_hint(false)
 	_refresh_ui()
 
+func _release_tray_focus() -> void:
+	if _trade_tray == null:
+		return
+	var fo := get_viewport().gui_get_focus_owner()
+	if fo != null and is_instance_valid(fo) and _trade_tray.is_ancestor_of(fo):
+		fo.release_focus()
+
 func _close_trade_tray_by_user() -> void:
 	if _trade_tray == null or not _trade_tray.visible:
 		return
 	_trade_tray.visible = false
+	_release_tray_focus()
 	_trade_counter_mode = false
 	_trade_tray.custom_minimum_size.y = 0.0
 	if session != null and session.state != null:
@@ -2720,6 +3376,72 @@ func _update_tray_min_height() -> void:
 		avail = _center_split.size.y - 480.0
 	_trade_tray.custom_minimum_size.y = minf(nat, maxf(avail, 96.0))
 
+func _build_offer_strip(root_vbox: VBoxContainer) -> void:
+	_offer_strip = PanelContainer.new()
+	var st := _paper_panel_style(true)
+	st.set_corner_radius_all(0)
+	st.shadow_size = 0
+	st.content_margin_left = 10
+	st.content_margin_right = 10
+	st.content_margin_top = 2
+	st.content_margin_bottom = 2
+	_offer_strip.add_theme_stylebox_override("panel", st)
+	_offer_strip.visible = false
+	root_vbox.add_child(_offer_strip)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	_offer_strip.add_child(row)
+	_offer_strip_label = Label.new()
+	_offer_strip_label.add_theme_font_size_override("font_size", 13)
+	_offer_strip_label.add_theme_color_override("font_color", Palette.HEADING)
+	row.add_child(_offer_strip_label)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spacer)
+	_offer_strip_chips = HBoxContainer.new()
+	_offer_strip_chips.add_theme_constant_override("separation", 6)
+	row.add_child(_offer_strip_chips)
+
+func _refresh_offer_strip(state: GameState) -> void:
+	if _offer_strip == null:
+		return
+	var ot: Dictionary = state.open_trade
+	var ot_open := not ot.is_empty()
+	_offer_strip.visible = ot_open
+	if not ot_open:
+		return
+	var from_p := int(ot.get("from", -1))
+	var from_name := GameTypes.PLAYER_NAMES[from_p] if from_p >= 0 and from_p < state.players.size() else "?"
+	if from_p >= 0 and from_p < state.players.size():
+		from_name = str(state.players[from_p].get("name", GameTypes.PLAYER_NAMES[from_p]))
+	_offer_strip_label.text = "%s offers %s for %s" % [
+		from_name,
+		_format_resource_bundle(ot.get("offer", {})),
+		_format_resource_bundle(ot.get("request", {})),
+	]
+	for c in _offer_strip_chips.get_children():
+		c.queue_free()
+	var responses: Dictionary = ot.get("responses", {})
+	for p_id in range(state.players.size()):
+		if p_id == from_p:
+			continue
+		var pname := str(state.players[p_id].get("name", GameTypes.PLAYER_NAMES[p_id]))
+		if not responses.has(p_id):
+			_offer_strip_chips.add_child(_make_pill("%s: waiting…" % pname, Palette.PAPER_DARK, Palette.TEXT_MUTED))
+			continue
+		var resp: Dictionary = responses[p_id]
+		match str(resp.get("status", "")):
+			"accept":
+				_offer_strip_chips.add_child(_make_pill("%s: ✓ accepts" % pname, Palette.PAPER_DARK, Palette.ACCENT_GREEN.darkened(0.25)))
+			"decline":
+				_offer_strip_chips.add_child(_make_pill("%s: ✗ declines" % pname, Palette.PAPER_DARK, Palette.ACCENT_RED.darkened(0.1)))
+			"counter":
+				_offer_strip_chips.add_child(_make_pill("%s: ↺ gives %s for your %s" % [
+					pname,
+					_format_resource_bundle(resp.get("offer", {})),
+					_format_resource_bundle(resp.get("request", {})),
+				], Palette.PAPER_DARK, Palette.HEADING))
+
 func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -> void:
 	if _trade_tray == null:
 		return
@@ -2730,14 +3452,26 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 		_trade_reopen_token = ""
 		_trade_ready_dismissed = false
 		_set_trade_hint(false)
-		if _trade_opened_auto and _trade_tray.visible:
+		var was_my_offer := _trade_last_ot_from == _view_pid()
+		if (_trade_opened_auto or was_my_offer) and _trade_tray.visible:
 			_trade_tray.visible = false
+			_release_tray_focus()
 		_trade_opened_auto = false
+		_trade_last_ot_from = -1
 	_trade_last_ot_open = ot_open
 	var from_p := int(ot.get("from", -1))
 	var my_pid := _view_pid()
 	var from_me_show := ot_open and from_p == my_pid
 	var respond := ot_open and human_acting and from_p != acting_id
+
+	# The tray is the viewed human's workspace: once they are neither the
+	# proposer nor the acting responder (their turn ended, bots negotiate on
+	# their own), it closes — the offer strip keeps the news visible.
+	if ot_open and _trade_tray.visible and from_p != my_pid and acting_id != my_pid:
+		_trade_tray.visible = false
+		_release_tray_focus()
+	if ot_open:
+		_trade_last_ot_from = from_p
 	var from_me := from_me_show and human_acting and acting_id == from_p
 
 	# Hot-seat: a fresh viewer starts from a clean draft, not the previous
@@ -2927,9 +3661,9 @@ func _rebuild_partner_cards(state: GameState, ot: Dictionary, ot_open: bool, hum
 						status = "✗ Declines"
 						status_color = Palette.ACCENT_RED.darkened(0.1)
 					elif st_str == "counter":
-						status = "↺ Counter: gives %s for %s" % [
-							_format_resource_bundle(resp.get("request", {})),
+						status = "↺ Counter: gives %s for your %s" % [
 							_format_resource_bundle(resp.get("offer", {})),
+							_format_resource_bundle(resp.get("request", {})),
 						]
 						status_color = Palette.HEADING
 						can_trade = true
@@ -3101,6 +3835,9 @@ func _on_resource_card_pressed(res: int) -> void:
 	if _hand_hidden():
 		return
 	var st := session.state
+	if st.phase == GameTypes.TurnPhase.TURN_DISCARD:
+		_discard_pick_one(res)
+		return
 	if not (
 		_is_human_acting()
 		and st.phase == GameTypes.TurnPhase.TURN_MAIN
@@ -3115,37 +3852,8 @@ func _on_resource_card_pressed(res: int) -> void:
 		_trade_reopen_token = ""
 	_adjust_trade_count(true, res, 1)
 
-func _style_card_button(btn: Button) -> void:
-	var st_n := StyleBoxFlat.new()
-	st_n.bg_color = Palette.PAPER
-	st_n.border_color = Palette.PANEL_BORDER
-	st_n.set_border_width_all(2)
-	st_n.set_corner_radius_all(8)
-	st_n.shadow_color = Palette.PAPER_SHADOW
-	st_n.shadow_size = 4
-	btn.add_theme_stylebox_override("normal", st_n)
-
-	var st_h: StyleBoxFlat = st_n.duplicate() as StyleBoxFlat
-	st_h.bg_color = Palette.PANEL_BG_ALT
-	st_h.border_color = Palette.HEADING
-	btn.add_theme_stylebox_override("hover", st_h)
-
-	var st_p: StyleBoxFlat = st_n.duplicate() as StyleBoxFlat
-	st_p.bg_color = Palette.PANEL_BG_ALT.darkened(0.1)
-	btn.add_theme_stylebox_override("pressed", st_p)
-
-	var st_d: StyleBoxFlat = st_n.duplicate() as StyleBoxFlat
-	st_d.bg_color = Palette.BUTTON_BG_DISABLED
-	st_d.border_color = Color(Palette.PANEL_BORDER, 0.5)
-	st_d.shadow_size = 0
-	btn.add_theme_stylebox_override("disabled", st_d)
-
-	var st_f: StyleBoxFlat = st_n.duplicate() as StyleBoxFlat
-	st_f.border_color = Palette.HEADING
-	st_f.set_border_width_all(3)
-	btn.add_theme_stylebox_override("focus", st_f)
-
 func _cancel_current_pick() -> void:
+	_close_steal_chooser()
 	_pending_guard_card = false
 	_board_view.clear_highlights()
 	_cancel_pick_btn.visible = false

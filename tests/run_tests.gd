@@ -31,6 +31,11 @@ func _init() -> void:
 	_test_discard_validation()
 	_test_trade_response_guards()
 	_test_difficulty3_stronger()
+	_test_bank_conservation_match()
+	_test_bank_production_rule()
+	_test_bank_maritime_empty()
+	_test_steal_victim_choice()
+	_test_standings()
 	_start_ui_tests()
 
 func _process(_delta: float) -> bool:
@@ -92,8 +97,8 @@ func _ui_drive_until(ui: Node, predicate: Callable, max_steps: int = 6000) -> bo
 
 func _ui_hand_labels_hidden(ui: Node) -> bool:
 	for r in GameTypes.ALL_RESOURCES:
-		var count_lbl: Label = ui._res_card_refs[r]["count"]
-		if str(count_lbl.text) != "—":
+		var face: CardFace = ui._res_card_refs[r]
+		if not bool(face.hidden_card):
 			return false
 	return true
 
@@ -510,6 +515,7 @@ func _test_full_4bot_simulated_match() -> void:
 	_assert(w >= 0 and w < 4, "Winner should be valid player index 0..3, got %d" % w)
 	var win_vp: int = session.state.get_victory_points(w, true) if w >= 0 else 0
 	_assert(win_vp >= 10, "Winner (player %d) should have >= 10 VP, got %d" % [w, win_vp])
+	_assert(session.state.resource_totals_ok(), "Bank + hands must still be 19 of every resource at match end")
 	_pass_section("8. Full 4-Bot Simulated Match Test (Winner=Player %d (%s) with %d VP in %d turns / %d steps)" % [w, GameTypes.PLAYER_NAMES[w] if w >= 0 else "None", win_vp, session.state.turn_number, steps])
 
 func _test_main_scene_load() -> void:
@@ -626,6 +632,7 @@ func _test_full_bot_match_2p_and_3p() -> void:
 		_assert(session.state.phase == GameTypes.TurnPhase.GAME_OVER, "%d-player bot match should reach GAME_OVER (turn %d, steps %d)" % [n, session.state.turn_number, steps])
 		var w: int = session.state.winner
 		_assert(w >= 0 and w < n, "%d-player bot match winner should be a valid seat, got %d" % [n, w])
+		_assert(session.state.resource_totals_ok(), "%d-player bot match must keep every resource conserved at match end" % n)
 	_pass_section("11. Two- and Three-Player Full Bot Match Tests (both reach GAME_OVER with 0 invalid actions)")
 
 func _start_ui_tests() -> void:
@@ -665,6 +672,77 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
 	], _test_roll_fx_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_discard_picker_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	], _test_steal_chooser_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_steal_toasts_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.HUMAN, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	], _test_steal_toasts_hotseat_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	], _test_offer_strip_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_tray_close_controls_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_costs_popover_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_game_over_splash_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_discard_layout_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_stale_discard_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_splash_winner_order_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_card_face_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_bank_stacks_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_port_badges_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_action_anim_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_toast_tween_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_port_geom_body)
 	_queue_ui_test([
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
@@ -716,8 +794,8 @@ func _test_hotseat_trade_ui_body(ui: Node) -> void:
 	ui._device_pass_btn.pressed.emit()
 	_assert(not bool(ui._hand_hidden()), "Pressing the cover button should reveal the acting human's hand")
 	for r in GameTypes.ALL_RESOURCES:
-		var count_lbl: Label = ui._res_card_refs[r]["count"]
-		_assert(count_lbl.text == "x%d" % int(st.players[1]["hand"].get(r, 0)), "Hand bar should show seat 1's count for resource %d" % r)
+		var face: CardFace = ui._res_card_refs[r]
+		_assert(not bool(face.hidden_card) and int(face.count) == int(st.players[1]["hand"].get(r, 0)), "Hand bar should show seat 1's count for resource %d" % r)
 	_assert(bool(ui._hand_view_name.visible) and str(ui._hand_view_name.text) == "Coral", "Hand bar view label should show the viewed seat's name")
 	_assert(str(ui._status_banner_label.text).begins_with("Coral"), "Banner should start with the viewed seat's name")
 	var give_res := -1
@@ -777,8 +855,8 @@ func _test_hotseat_privacy_body(ui: Node) -> void:
 			continue
 		var all_match := true
 		for r in GameTypes.ALL_RESOURCES:
-			var count_lbl: Label = ui._res_card_refs[r]["count"]
-			if str(count_lbl.text) != "x%d" % int(ui.session.state.players[acting]["hand"].get(r, 0)):
+			var face: CardFace = ui._res_card_refs[r]
+			if bool(face.hidden_card) or int(face.count) != int(ui.session.state.players[acting]["hand"].get(r, 0)):
 				all_match = false
 		reveal_ok = all_match
 		# advance until the bot is acting: everything hides again
@@ -799,9 +877,10 @@ func _test_hotseat_privacy_body(ui: Node) -> void:
 		var leak := false
 		for p_id in range(2):
 			for r in GameTypes.ALL_RESOURCES:
-				if int(ui.session.state.players[p_id]["hand"].get(r, 0)) > 0:
-					var lbl: Label = ui._res_card_refs[r]["count"]
-					if str(lbl.text) == "x%d" % int(ui.session.state.players[p_id]["hand"].get(r, 0)):
+				var cnt := int(ui.session.state.players[p_id]["hand"].get(r, 0))
+				if cnt > 0:
+					var face: CardFace = ui._res_card_refs[r]
+					if not bool(face.hidden_card) and int(face.count) == cnt:
 						leak = true
 		if leak:
 			continue
@@ -820,8 +899,8 @@ func _test_hotseat_privacy_body(ui: Node) -> void:
 		var acting2: int = ui.session.get_acting_player_id()
 		var ok2 := true
 		for r in GameTypes.ALL_RESOURCES:
-			var lbl2: Label = ui._res_card_refs[r]["count"]
-			if str(lbl2.text) != "x%d" % int(ui.session.state.players[acting2]["hand"].get(r, 0)):
+			var face2: CardFace = ui._res_card_refs[r]
+			if bool(face2.hidden_card) or int(face2.count) != int(ui.session.state.players[acting2]["hand"].get(r, 0)):
 				ok2 = false
 		back_ok = ok2
 		break
@@ -1103,19 +1182,20 @@ func _test_dev_card_chips_body(ui: Node) -> void:
 	st.current_player = 0
 	st.players[0]["new_dev_cards"].append(GameTypes.DevCardType.GUARD)
 	ui._refresh_ui()
-	var guard_chip: Button = ui._action_chips[GameTypes.DevCardType.GUARD]
+	var guard_chip: CardFace = ui._action_chips[GameTypes.DevCardType.GUARD]
 	_assert(bool(guard_chip.disabled), "A Guard bought this turn (new_dev_cards only) must show a disabled chip")
-	_assert(str(guard_chip.text).contains("(new)"), "The chip label should flag the card bought this turn")
+	_assert(int(guard_chip.count) == 1, "The Guard card should show count 1")
 	_assert(str(guard_chip.tooltip_text).contains("Bought this turn"), "The disabled chip should explain the reason, got: %s" % str(guard_chip.tooltip_text))
 	st.players[0]["new_dev_cards"].clear()
 	st.players[0]["dev_cards"].append(GameTypes.DevCardType.GUARD)
 	ui._refresh_ui()
 	_assert(not bool(guard_chip.disabled), "A Guard held in dev_cards should enable the chip")
+	_assert(str(guard_chip.tooltip_text).contains("new this turn") or str(guard_chip.tooltip_text).contains("Play Guard"), "Playable Guard tooltip explains, got: %s" % str(guard_chip.tooltip_text))
 	_assert(str(guard_chip.tooltip_text) == "Play Guard", "The enabled chip tooltip should say Play Guard, got: %s" % str(guard_chip.tooltip_text))
 	st.players[0]["dev_cards"].clear()
 	st.players[0]["dev_cards"].append(GameTypes.DevCardType.CHARTER_POINT)
 	ui._refresh_ui()
-	var charter_chip: Button = ui._action_chips[GameTypes.DevCardType.CHARTER_POINT]
+	var charter_chip: CardFace = ui._action_chips[GameTypes.DevCardType.CHARTER_POINT]
 	_assert(bool(charter_chip.disabled), "A Charter chip must never be clickable")
 	_pass_section("20. Action Card Chips Test (bought-this-turn disabled with reason; owned enabled; Charter inert)")
 
@@ -1320,8 +1400,8 @@ func _test_trade_tray_close_body(ui: Node) -> void:
 		else:
 			break
 	_assert(ui.session.state.open_trade.is_empty(), "Second offer should resolve")
-	_assert(bool(ui._trade_tray.visible), "A tray the human opened themselves stays open after the offer resolves")
-	_pass_section("23. Trade Tray Auto-Close Test (auto-opened closes on resolve; user-opened stays open)")
+	_assert(not bool(ui._trade_tray.visible), "The tray must close once the human is no longer part of the offer (bot-to-bot resolution)")
+	_pass_section("23. Trade Tray Auto-Close Test (auto-opened closes on resolve; tray closes when the human is out of the loop)")
 
 func _test_game_over_banner_body(ui: Node) -> void:
 	var seats: Array[SeatConfig] = [
@@ -1362,6 +1442,94 @@ func _test_roll_fx_body(ui: Node) -> void:
 	_assert(fx2 == fx1 + 1, "A second identical 3+3 roll must also trigger the animation")
 	_pass_section("25. Roll Animation Test (two identical rolls both animate)")
 
+
+func _test_toast_tween_body(ui: Node) -> void:
+	var steps: Array = []
+	for i in range(10):
+		steps.append(func() -> void:
+			ui._show_toast("spam toast %d" % i, Color(0.55, 0.18, 0.14), 0.6)
+		)
+	steps.append(func() -> void:
+		var mid: int = ui._toast_layer.get_child_count()
+		_assert(mid == 3, "Toast cap keeps exactly 3 panels during the spam, got %d" % mid)
+	)
+	for i in range(120):
+		steps.append(func() -> void:
+			pass
+		)
+	steps.append(func() -> void:
+		var n: int = ui._toast_layer.get_child_count()
+		_assert(n <= 3, "At most 3 toast panels may exist, got %d" % n)
+		var invalid := 0
+		for c in ui._toast_layer.get_children():
+			if not is_instance_valid(c):
+				invalid += 1
+		_assert(invalid == 0, "No invalid toast panels left after the tweens finish, got %d" % invalid)
+		_assert(ui._toast_labels.size() <= 3, "Toast label bookkeeping stays capped, got %d" % ui._toast_labels.size())
+		_pass_section("47. Toast Tween Lifetime Test (10 toasts over consecutive frames, cap 3, no dangling targets)")
+	)
+	for j in range(steps.size() - 1, -1, -1):
+		_ui_queue.push_front(steps[j])
+
+func _check_port_badges_clear(bv: BoardView, label: String) -> void:
+	_assert(bv.get_port_count() > 0, "Ports exist %s" % label)
+	_assert(bv.get_port_badge_data().size() == bv.get_port_count(), "Every port gets badge data %s" % label)
+	var polys := bv.get_land_polys()
+	_assert(polys.size() > 0, "Land polygons are cached %s" % label)
+	var view := Rect2(Vector2.ZERO, bv.size).grow(-2.0)
+	for bd in bv.get_port_badge_data():
+		var c: Vector2 = bd["center"]
+		var r: float = bd["r"]
+		var tag: Rect2 = bd["tag_rect"]
+		var boat: Rect2 = bd["boat_rect"]
+		var badge_rect := Rect2(c - Vector2(r, r), Vector2(r * 2.0, r * 2.0))
+		_assert(view.encloses(badge_rect), "Badge circle is inside the board view %s (c=%s r=%.1f)" % [label, str(c), r])
+		_assert(view.encloses(tag), "Badge tag is inside the board view %s (%s)" % [label, str(tag)])
+		_assert(not tag.grow(1.0).intersects(boat), "Tag does not touch its ship %s" % label)
+		var d_boat: float = c.distance_to(Vector2(clampf(c.x, boat.position.x, boat.end.x), clampf(c.y, boat.position.y, boat.end.y)))
+		_assert(d_boat >= r + 1.0, "Badge circle is clear of its ship %s (gap %.1f)" % [label, d_boat])
+		for poly in polys:
+			_assert(bv.point_poly_dist(c, poly) >= r + 1.0, "Badge circle is clear of land %s (gap %.1f)" % [label, bv.point_poly_dist(c, poly)])
+			var corner_min := INF
+			for corner in [tag.position, Vector2(tag.end.x, tag.position.y), tag.end, Vector2(tag.position.x, tag.end.y)]:
+				corner_min = minf(corner_min, bv.point_poly_dist(corner, poly))
+			_assert(corner_min >= 0.5, "Tag is clear of land %s (gap %.1f)" % [label, corner_min])
+
+func _test_port_geom_body(ui: Node) -> void:
+	_check_port_badges_clear(ui._board_view, "at the default 1280x800 window, board ~940x628")
+	var bv2 := BoardView.new()
+	ui.get_tree().root.add_child(bv2)
+	bv2.state = ui.session.state
+	var steps: Array = []
+	steps.append(func() -> void:
+		bv2.size = Vector2(930, 650)
+	)
+	steps.append(func() -> void:
+		pass
+	)
+	steps.append(func() -> void:
+		pass
+	)
+	steps.append(func() -> void:
+		_assert(bv2.size == Vector2(930, 650), "Standalone board keeps 930x650, got %s" % str(bv2.size))
+		_check_port_badges_clear(bv2, "at a 930x650 board")
+		bv2.size = Vector2(900, 900)
+	)
+	steps.append(func() -> void:
+		pass
+	)
+	steps.append(func() -> void:
+		pass
+	)
+	steps.append(func() -> void:
+		_check_port_badges_clear(bv2, "at a 900x900 board")
+		_assert(bv2.get_port_badge_data().size() == 9, "All nine ports get badges on the 900x900 board")
+		bv2.free()
+		_pass_section("48. Port Badge Geometry Test (sea-side badges clear of hexes, ships and the view rect)")
+	)
+	for j in range(steps.size() - 1, -1, -1):
+		_ui_queue.push_front(steps[j])
+
 func _test_sfx_body(ui: Node) -> void:
 	var sfx: Node = ui.get_node_or_null("Sfx")
 	_assert(sfx != null, "UI should own an Sfx child")
@@ -1399,3 +1567,992 @@ func _test_sfx_body(ui: Node) -> void:
 	ui._settings_mute_check.button_pressed = false
 	_assert(not AudioServer.is_bus_mute(0), "Unmute must un-mute the Master bus")
 	_pass_section("26. Sound Test (clips generated, roll/build counts, mute applies)")
+
+func _test_bank_conservation_match() -> void:
+	var session := LocalSession.new()
+	var seats: Array[SeatConfig] = []
+	for i in range(4):
+		var sc := SeatConfig.new()
+		sc.seat_id = i
+		sc.seat_type = SeatConfig.SeatType.AI_MEDIUM
+		sc.display_name = "Bank Bot %d" % i
+		seats.append(sc)
+	session.start_match(31001, seats, true)
+	for r in GameTypes.ALL_RESOURCES:
+		_assert(int(session.state.bank.get(r, 0)) == 19, "Bank must start with 19 %s" % GameTypes.resource_name(r))
+	_assert(session.state.resource_totals_ok(), "Fresh match must satisfy the resource invariant")
+	var steps := 0
+	var checks := 0
+	var ok_everywhere := true
+	while session.state.phase != GameTypes.TurnPhase.GAME_OVER and steps < 10000:
+		var res: Dictionary = session.step_ai()
+		if not bool(res.get("ok", false)):
+			break
+		steps += 1
+		if steps % 10 == 0:
+			checks += 1
+			if not session.state.resource_totals_ok():
+				ok_everywhere = false
+				break
+	_assert(session.state.phase == GameTypes.TurnPhase.GAME_OVER, "Bank conservation match should finish")
+	_assert(ok_everywhere, "Bank + hands = 19 must hold at every check during the match")
+	_assert(checks >= 10, "Conservation should have been checked many times, got %d" % checks)
+	_assert(session.state.resource_totals_ok(), "Conservation must hold at match end")
+	_pass_section("27. Bank Conservation Test (19 per resource, checked mid-match and at end)")
+
+func _test_bank_production_rule() -> void:
+	var gs := GameState.create_new_game(4242, 4, true)
+	var t_id := -1
+	for t in range(19):
+		if t != gs.blocker_tile and GameTypes.terrain_to_resource(gs.tile_terrains[t]) >= 0:
+			t_id = t
+			break
+	_assert(t_id != -1, "Need one producing tile for the production test")
+	var res := GameTypes.terrain_to_resource(gs.tile_terrains[t_id])
+	var topo := HexMath.get_topology()
+	var verts: Array = topo.tile_vertices[t_id]
+	gs.blocker_tile = (t_id + 3) % 19
+	for t in range(19):
+		gs.tile_numbers[t] = 99
+	gs.tile_numbers[t_id] = 5
+	gs.vertex_owner[verts[0]] = 0
+	gs.vertex_building[verts[0]] = GameTypes.BuildingType.SETTLEMENT
+	gs.vertex_owner[verts[1]] = 1
+	gs.vertex_building[verts[1]] = GameTypes.BuildingType.SETTLEMENT
+	gs.bank[res] = 1
+	var evs: Array[String] = []
+	RulesEngine.apply_production(gs, 5, evs)
+	_assert(int(gs.players[0]["hand"].get(res, 0)) == 0 and int(gs.players[1]["hand"].get(res, 0)) == 0, "Short bank with two claimants must give nobody the resource")
+	_assert(int(gs.bank[res]) == 1, "Nobody-received production must not touch the bank")
+	var out_of := false
+	for ev in evs:
+		if str(ev).contains("The bank is out of"):
+			out_of = true
+	_assert(out_of, "Short bank with two claimants must log 'The bank is out of <res>.'")
+	# single claimant gets what is left
+	gs.vertex_owner[verts[1]] = -1
+	gs.vertex_building[verts[1]] = GameTypes.BuildingType.NONE
+	gs.vertex_building[verts[0]] = GameTypes.BuildingType.CITY
+	var evs2: Array[String] = []
+	RulesEngine.apply_production(gs, 5, evs2)
+	_assert(int(gs.players[0]["hand"].get(res, 0)) == 1, "Single claimant should receive the one resource left in the bank")
+	_assert(int(gs.bank[res]) == 0, "Leftover payout must drain the bank to 0")
+	# normal production drains the bank exactly by the owed amount
+	gs.players[0]["hand"][res] = 0
+	gs.bank[res] = 19
+	var evs3: Array[String] = []
+	RulesEngine.apply_production(gs, 5, evs3)
+	_assert(int(gs.players[0]["hand"].get(res, 0)) == 2 and int(gs.bank[res]) == 17, "Full bank pays city 2 and leaves bank 17")
+	_assert(gs.resource_totals_ok(), "Production must conserve the total supply")
+	_pass_section("28. Bank-Empty Production Test (short bank: nobody / single claimant gets the rest)")
+
+func _test_bank_maritime_empty() -> void:
+	var gs := GameState.create_new_game(4343, 4, true)
+	var p: Dictionary = gs.players[0]
+	p["hand"][GameTypes.ResourceType.TIMBER] = 4
+	gs.bank[GameTypes.ResourceType.TIMBER] = 15
+	gs.bank[GameTypes.ResourceType.CLAY] = 0
+	gs.players[3]["hand"][GameTypes.ResourceType.CLAY] = 19
+	gs.current_player = 0
+	gs.phase = GameTypes.TurnPhase.TURN_MAIN
+	_assert(gs.resource_totals_ok(), "Crafted maritime state must start consistent")
+	var events1: Array[String] = []
+	var res := RulesEngine.apply_action(gs, 0, GameAction.maritime_trade(GameTypes.ResourceType.TIMBER, GameTypes.ResourceType.CLAY))
+	_assert(not bool(res.get("ok", false)), "Maritime trade must fail when the wanted bank pile is empty")
+	_assert(str(res.get("error", "")).contains("The bank has no"), "Maritime fail should say 'The bank has no <res>.', got '%s'" % str(res.get("error", "")))
+	_assert(int(p["hand"].get(GameTypes.ResourceType.TIMBER, 0)) == 4, "Failed maritime trade must not take resources")
+	gs.bank[GameTypes.ResourceType.CLAY] = 5
+	gs.players[3]["hand"][GameTypes.ResourceType.CLAY] = 14
+	var events2: Array[String] = []
+	var res2 := RulesEngine.apply_action(gs, 0, GameAction.maritime_trade(GameTypes.ResourceType.TIMBER, GameTypes.ResourceType.CLAY))
+	_assert(bool(res2.get("ok", false)), "Maritime trade should succeed when the bank has the resource")
+	_assert(int(p["hand"].get(GameTypes.ResourceType.TIMBER, 0)) == 0 and int(p["hand"].get(GameTypes.ResourceType.CLAY, 0)) == 1, "Maritime trade swaps 4 Timber for 1 Clay")
+	_assert(int(gs.bank.get(GameTypes.ResourceType.TIMBER, 0)) == 19, "Given resources must go into the bank")
+	_assert(gs.resource_totals_ok(), "Maritime trade must conserve the total supply")
+	_pass_section("29. Maritime Empty Bank Test (refused on empty pile, pays the bank on success)")
+
+func _test_steal_victim_choice() -> void:
+	var gs := GameState.create_new_game(4444, 4, true)
+	var topo := HexMath.get_topology()
+	var t_id := -1
+	for t in range(19):
+		if topo.tile_vertices[t].size() >= 3:
+			t_id = t
+			break
+	var verts: Array = topo.tile_vertices[t_id]
+	gs.blocker_tile = (t_id + 2) % 19
+	var start_blocker: int = gs.blocker_tile
+	gs.players[0]["hand"] = GameTypes.empty_hand()
+	gs.players[1]["hand"] = GameTypes.empty_hand()
+	gs.players[2]["hand"] = GameTypes.empty_hand()
+	gs.current_player = 0
+	# 0 victims: nobody else on the tile -> move succeeds, no steal
+	gs.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	var ev0: Array[String] = []
+	var r0 := RulesEngine.apply_action(gs, 0, GameAction.move_blocker(t_id, -1))
+	_assert(bool(r0.get("ok", false)), "Blocker move with 0 victims should succeed")
+	_assert(gs.blocker_tile == t_id, "Blocker should have moved with 0 victims")
+	_assert(gs.last_steal.is_empty(), "0 victims means no last_steal record")
+	# 1 victim: steals even with a bogus target
+	gs.blocker_tile = start_blocker
+	gs.vertex_owner[verts[0]] = 1
+	gs.vertex_building[verts[0]] = GameTypes.BuildingType.SETTLEMENT
+	gs.players[1]["hand"][GameTypes.ResourceType.FLEECE] = 2
+	_assert(RulesEngine.get_steal_victims(gs, 0, t_id) == [1], "get_steal_victims should list exactly the one victim")
+	gs.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	var ev1: Array[String] = []
+	var r1 := RulesEngine.apply_action(gs, 0, GameAction.move_blocker(t_id, 99))
+	_assert(bool(r1.get("ok", false)), "Single victim must be stolen from whatever target_player says")
+	_assert(int(gs.last_steal.get("thief", -1)) == 0 and int(gs.last_steal.get("victim", -1)) == 1, "last_steal must record thief and victim")
+	_assert(int(gs.last_steal.get("serial", 0)) == 1, "First steal has serial 1")
+	_assert(int(gs.last_steal.get("res", -1)) == GameTypes.ResourceType.FLEECE, "Stolen resource must be recorded")
+	_assert(int(gs.players[1]["hand"].get(GameTypes.ResourceType.FLEECE, 0)) == 1, "Victim lost exactly one card")
+	# 2 victims: needs a valid target
+	gs.blocker_tile = start_blocker
+	gs.vertex_owner[verts[1]] = 2
+	gs.vertex_building[verts[1]] = GameTypes.BuildingType.SETTLEMENT
+	gs.players[2]["hand"][GameTypes.ResourceType.CLAY] = 1
+	var victims := RulesEngine.get_steal_victims(gs, 0, t_id)
+	_assert(victims.has(1) and victims.has(2), "Both owners with cards must be listed as victims")
+	var hand1_before: int = GameTypes.hand_total(gs.players[1]["hand"])
+	var hand2_before: int = GameTypes.hand_total(gs.players[2]["hand"])
+	gs.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	var ev2: Array[String] = []
+	var r2 := RulesEngine.apply_action(gs, 0, GameAction.move_blocker(t_id, -1))
+	_assert(not bool(r2.get("ok", false)), "2 victims without a valid target must fail")
+	_assert(str(r2.get("error", "")) == "Choose who to steal from.", "Fail reason should be 'Choose who to steal from.', got '%s'" % str(r2.get("error", "")))
+	_assert(gs.blocker_tile == start_blocker, "Failed steal must leave the blocker in place")
+	_assert(GameTypes.hand_total(gs.players[1]["hand"]) == hand1_before and GameTypes.hand_total(gs.players[2]["hand"]) == hand2_before, "Failed steal must not move any cards")
+	_assert(int(gs.last_steal.get("serial", 0)) == 1, "Failed steal must not bump the serial")
+	# Guard card kept when the choice fails
+	gs.players[0]["dev_cards"] = [GameTypes.DevCardType.GUARD]
+	gs.current_player = 0
+	gs.phase = GameTypes.TurnPhase.TURN_MAIN
+	gs.open_trade.clear()
+	var ev3: Array[String] = []
+	var r3 := RulesEngine.apply_action(gs, 0, GameAction.play_guard(t_id, -1))
+	_assert(not bool(r3.get("ok", false)), "play_guard must fail without a valid victim choice")
+	_assert(gs.players[0]["dev_cards"].has(GameTypes.DevCardType.GUARD), "Failed guard play keeps the card")
+	_assert(gs.blocker_tile == start_blocker, "Failed guard play leaves the blocker in place")
+	# valid target: steals from the chosen victim only
+	var ev4: Array[String] = []
+	var r4 := RulesEngine.apply_action(gs, 0, GameAction.play_guard(t_id, 2))
+	_assert(bool(r4.get("ok", false)), "play_guard with a valid victim target should succeed")
+	_assert(not gs.players[0]["dev_cards"].has(GameTypes.DevCardType.GUARD), "Successful guard play consumes the card")
+	_assert(int(gs.last_steal.get("victim", -1)) == 2 and int(gs.last_steal.get("serial", 0)) == 2, "Chosen victim is robbed and serial increments")
+	_assert(int(gs.last_steal.get("res", -1)) == GameTypes.ResourceType.CLAY, "Victim 2's only card (Clay) must be the recorded steal")
+	_assert(int(gs.players[1]["hand"].get(GameTypes.ResourceType.FLEECE, 0)) == 1, "The non-chosen victim keeps all cards")
+	_pass_section("30. Steal Victim Choice Test (0/1/2 victims, fail keeps card, last_steal recorded)")
+
+func _test_standings() -> void:
+	var gs := GameState.create_new_game(4545, 4, true)
+	gs.vertex_owner[3] = 0
+	gs.vertex_building[3] = GameTypes.BuildingType.SETTLEMENT
+	gs.vertex_owner[9] = 0
+	gs.vertex_building[9] = GameTypes.BuildingType.SETTLEMENT
+	gs.players[0]["dev_cards"] = [GameTypes.DevCardType.CHARTER_POINT]
+	gs.longest_route_holder = 0
+	gs.vertex_owner[14] = 1
+	gs.vertex_building[14] = GameTypes.BuildingType.CITY
+	gs.vertex_owner[20] = 1
+	gs.vertex_building[20] = GameTypes.BuildingType.SETTLEMENT
+	gs.vertex_owner[25] = 2
+	gs.vertex_building[25] = GameTypes.BuildingType.SETTLEMENT
+	gs.vertex_owner[30] = 3
+	gs.vertex_building[30] = GameTypes.BuildingType.SETTLEMENT
+	gs.largest_guard_holder = 3
+	var rows: Array = gs.get_standings()
+	_assert(rows.size() == 4, "Standings should list every player")
+	var order: Array[int] = []
+	for row in rows:
+		order.append(int(row["pid"]))
+	_assert(order == [0, 1, 3, 2], "Standings order should be 0,1,3,2, got %s" % str(order))
+	var by_pid: Dictionary = {}
+	for row in rows:
+		by_pid[int(row["pid"])] = row
+	_assert(int(by_pid[0]["vp"]) == 5, "Player 0: 2 settlements + hidden charter + longest route = 5 VP, got %d" % int(by_pid[0]["vp"]))
+	_assert(int(by_pid[0]["charters"]) == 1, "Player 0 shows the hidden Charter count")
+	_assert(bool(by_pid[0]["longest_route"]), "Player 0 flagged for longest route")
+	_assert(int(by_pid[1]["vp"]) == 3 and int(by_pid[1]["cities"]) == 1 and int(by_pid[1]["settlements"]) == 1, "Player 1: 1 city + 1 settlement = 3 VP")
+	_assert(int(by_pid[3]["vp"]) == 3 and bool(by_pid[3]["largest_guard"]), "Player 3: settlement + largest guard = 3 VP")
+	_assert(int(by_pid[2]["vp"]) == 1, "Player 2 has 1 VP")
+	_assert(str(by_pid[2]["name"]) == GameTypes.PLAYER_NAMES[2], "Standings carry player names")
+	# tie: equal everything -> lower pid first
+	var gs2 := GameState.create_new_game(4546, 2, true)
+	gs2.vertex_owner[2] = 0
+	gs2.vertex_building[2] = GameTypes.BuildingType.SETTLEMENT
+	gs2.vertex_owner[8] = 1
+	gs2.vertex_building[8] = GameTypes.BuildingType.SETTLEMENT
+	var rows2: Array = gs2.get_standings()
+	_assert(int(rows2[0]["pid"]) == 0 and int(rows2[1]["pid"]) == 1, "Full ties break by lower pid")
+	_pass_section("31. Standings Test (hidden Charter counted, city tie-break, pid tie-break)")
+
+func _ui_click_job(node: Control, after: Callable) -> void:
+	_ui_queue.push_front(func() -> void:
+		if node == null or not is_instance_valid(node):
+			_assert(false, "Click target should still be valid")
+			return
+		if node.size.x <= 0.0:
+			_assert(false, "Click target should have a real size")
+			return
+		var center: Vector2 = root.get_screen_transform() * (node.get_global_transform() * (node.size * 0.5))
+		var press_ev := InputEventMouseButton.new()
+		press_ev.button_index = MOUSE_BUTTON_LEFT
+		press_ev.pressed = true
+		press_ev.position = center
+		press_ev.global_position = center
+		root.push_input(press_ev)
+		var release_ev := InputEventMouseButton.new()
+		release_ev.button_index = MOUSE_BUTTON_LEFT
+		release_ev.pressed = false
+		release_ev.position = center
+		release_ev.global_position = center
+		root.push_input(release_ev)
+		after.call()
+	)
+
+func _ui_click_job_at(node: Control, local_point: Vector2, after: Callable) -> void:
+	_ui_queue.push_front(func() -> void:
+		if not is_instance_valid(node) or node.size.x <= 0.0:
+			_assert(false, "CardFace missing for badge click")
+			return
+		var center: Vector2 = root.get_screen_transform() * (node.get_global_transform() * local_point)
+		var pe := InputEventMouseButton.new()
+		pe.button_index = MOUSE_BUTTON_LEFT
+		pe.pressed = true
+		pe.position = center
+		pe.global_position = center
+		root.push_input(pe)
+		var re := InputEventMouseButton.new()
+		re.button_index = MOUSE_BUTTON_LEFT
+		re.pressed = false
+		re.position = center
+		re.global_position = center
+		root.push_input(re)
+		after.call()
+	)
+
+func _ui_key_job(key: int, shift: bool, after: Callable) -> void:
+	_ui_queue.push_front(func() -> void:
+		var kd := InputEventKey.new()
+		kd.keycode = key
+		kd.shift_pressed = shift
+		kd.pressed = true
+		root.push_input(kd)
+		var ku := InputEventKey.new()
+		ku.keycode = key
+		ku.shift_pressed = shift
+		ku.pressed = false
+		root.push_input(ku)
+		after.call()
+	)
+
+func _test_discard_picker_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52001, seats, true)
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_DISCARD
+	st.current_player = 0
+	st.pending_discards = {0: 4}
+	st.players[0]["hand"] = GameTypes.empty_hand()
+	st.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 3
+	st.players[0]["hand"][GameTypes.ResourceType.CLAY] = 3
+	st.players[0]["hand"][GameTypes.ResourceType.FLEECE] = 2
+	ui._refresh_ui()
+	_assert(bool(ui._discard_mode_box.visible), "Discard mode should switch the hand bar")
+	_assert(str(ui._discard_heading.text) == "Discard 4 cards (picked 0 of 4)", "Heading should read 'Discard 4 cards (picked 0 of 4)', got '%s'" % str(ui._discard_heading.text))
+	_assert(bool(ui._discard_confirm_btn.disabled), "Discard must stay disabled until 4 cards are picked")
+	var refs: Dictionary = ui._res_card_refs
+	var timber_card: CardFace = refs[GameTypes.ResourceType.TIMBER]
+	var clay_card: CardFace = refs[GameTypes.ResourceType.CLAY]
+	_ui_click_job(timber_card, func() -> void:
+		_ui_click_job(timber_card, func() -> void:
+			_ui_click_job(clay_card, func() -> void:
+				_assert(str(ui._discard_heading.text) == "Discard 4 cards (picked 3 of 4)", "Three real picks should show 'picked 3 of 4', got '%s'" % str(ui._discard_heading.text))
+				_assert(int(timber_card.count) == 3, "Cards keep normal counts in discard mode, got 'x%d'" % int(timber_card.count))
+				_assert(int(timber_card.badge) == 2, "Timber badge should show 2, got %d" % int(timber_card.badge))
+				_assert(bool(ui._discard_confirm_btn.disabled), "3 of 4 picked must still disable Discard")
+				_assert(not bool(ui._trade_tray.visible), "Discard clicks must not open the trade tray")
+				_ui_click_job_at(clay_card, clay_card.badge_center_local(), func() -> void:
+					_assert(str(ui._discard_heading.text) == "Discard 4 cards (picked 2 of 4)", "Badge tap should take one back, got '%s'" % str(ui._discard_heading.text))
+					_assert(int(clay_card.badge) == 0, "Badge clears when the last pick is taken back, got %d" % int(clay_card.badge))
+					_ui_key_job(KEY_2, false, func() -> void:
+						_ui_key_job(KEY_4, false, func() -> void:
+							_ui_key_job(KEY_4, true, func() -> void:
+								_assert(str(ui._discard_heading.text) == "Discard 4 cards (picked 3 of 4)", "Keys 1-5 add and Shift removes, got '%s'" % str(ui._discard_heading.text))
+								ui._discard_auto_btn.pressed.emit()
+								_assert(str(ui._discard_heading.text) == "Discard 4 cards (picked 4 of 4)", "'Pick for me' should fill 4, got '%s'" % str(ui._discard_heading.text))
+								_assert(not bool(ui._discard_confirm_btn.disabled), "Discard must be enabled at 4 of 4")
+								_assert(ui.session.state.phase == GameTypes.TurnPhase.TURN_DISCARD, "'Pick for me' must not submit by itself")
+								var picked: Dictionary = ui._discard_pick.duplicate()
+								var before: Dictionary = ui.session.state.players[0]["hand"].duplicate()
+								_ui_key_job(KEY_ENTER, false, func() -> void:
+									_assert(ui.session.state.phase != GameTypes.TurnPhase.TURN_DISCARD, "Enter must confirm the discard")
+									_assert(not bool(ui._discard_mode_box.visible), "Discard mode ends after confirming")
+									var exact := true
+									for r in GameTypes.ALL_RESOURCES:
+										if int(ui.session.state.players[0]["hand"].get(r, 0)) != int(before.get(r, 0)) - int(picked.get(r, 0)):
+											exact = false
+									_assert(exact, "Hand must shrink by exactly the picked cards")
+									_assert(int(ui._discard_picked_total()) == 0, "Picks reset after confirming")
+									_pass_section("32. Discard Picker Test (hand-bar picker, real clicks/keys, Pick for me, exact submit)")
+								)
+							)
+						)
+					)
+				)
+			)
+		)
+	)
+
+func _test_steal_chooser_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	]
+	ui.session.start_match(52002, seats, true)
+	var st: GameState = ui.session.state
+	var topo := HexMath.get_topology()
+	var tile_a: int = 5
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 0
+	st.blocker_tile = 9
+	st.vertex_owner[topo.tile_vertices[tile_a][0]] = 1
+	st.vertex_owner[topo.tile_vertices[tile_a][1]] = 2
+	st.players[1]["hand"] = GameTypes.empty_hand()
+	st.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 2
+	st.players[2]["hand"] = GameTypes.empty_hand()
+	st.players[2]["hand"][GameTypes.ResourceType.IRON] = 3
+	st.players[0]["hand"] = GameTypes.empty_hand()
+	st.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 1
+	ui._refresh_ui()
+	_assert(ui._board_view.interaction_mode == BoardView.InteractionMode.PICK_BLOCKER_TILE, "Should be picking a blocker tile")
+	ui._on_board_tile_clicked(tile_a)
+	_assert(bool(ui._steal_chooser.visible), "Two victims should open the steal chooser")
+	_assert(ui._steal_victim_btns.size() == 2, "Chooser should list both victims, got %d" % ui._steal_victim_btns.size())
+	if ui._steal_victim_btns.size() == 2:
+		var b0lbl := _first_label_text(ui._steal_victim_btns[0])
+		_assert(b0lbl.begins_with("1. Dune — 2 cards"), "First victim button should read '1. Dune — 2 cards', got '%s'" % b0lbl)
+		var b0sw := _find_swatch_of(ui._steal_victim_btns[0], GameTypes.PLAYER_COLORS[1])
+		_assert(b0sw, "Victim button should carry the victim's colour swatch")
+		var b0style = ui._steal_victim_btns[0].get_theme_stylebox("normal")
+		_assert(b0style != null and b0style.bg_color.v > 0.55, "Victim buttons must use the paper button style, not the dark default")
+	_assert(str(ui._status_banner_label.text).begins_with("Choose who to steal from"), "Banner should ask who to steal from")
+	_ui_key_job(KEY_ESCAPE, false, func() -> void:
+		_assert(not bool(ui._steal_chooser.visible), "Esc must close the steal chooser")
+		_assert(ui._board_view.interaction_mode == BoardView.InteractionMode.PICK_BLOCKER_TILE, "Esc must keep tile picking active")
+		ui._on_board_tile_clicked(tile_a)
+		_assert(bool(ui._steal_chooser.visible), "Clicking the tile again should reopen the chooser")
+		var victims: Array[int] = ui._steal_victims.duplicate()
+		var thief_before: int = GameTypes.hand_total(ui.session.state.players[0]["hand"])
+		var victim_before: int = GameTypes.hand_total(ui.session.state.players[victims[1]]["hand"])
+		_ui_key_job(KEY_2, false, func() -> void:
+			_assert(not bool(ui._steal_chooser.visible), "Key 2 must close the chooser")
+			_assert(ui.session.state.blocker_tile == 5, "Key 2 should have moved the blocker to the picked tile")
+			_assert(ui.session.state.phase == GameTypes.TurnPhase.TURN_MAIN, "Blocker move should end in TURN_MAIN")
+			_assert(GameTypes.hand_total(ui.session.state.players[victims[1]]["hand"]) == victim_before - 1, "The chosen victim must lose the card")
+			_assert(GameTypes.hand_total(ui.session.state.players[0]["hand"]) == thief_before + 1, "The thief must gain the card")
+			_assert(int(ui.session.state.last_steal.get("victim", -1)) == victims[1], "last_steal must record the chosen victim")
+			# exactly one victim: submit straight away, no chooser
+			ui.session.state.vertex_owner[HexMath.get_topology().tile_vertices[5][1]] = -1
+			ui.session.state.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+			ui.session.state.current_player = 0
+			ui.session.state.blocker_tile = 9
+			ui._refresh_ui()
+			var solo_before: int = GameTypes.hand_total(ui.session.state.players[1]["hand"])
+			ui._on_board_tile_clicked(5)
+			_assert(not bool(ui._steal_chooser.visible), "One victim must not open the chooser")
+			_assert(ui.session.state.blocker_tile == 5, "Single-victim move should submit immediately")
+			_assert(GameTypes.hand_total(ui.session.state.players[1]["hand"]) == solo_before - 1, "The single victim must be stolen from")
+			# zero victims: move without a steal
+			ui.session.state.vertex_owner[HexMath.get_topology().tile_vertices[5][0]] = -1
+			var serial_before: int = int(ui.session.state.last_steal.get("serial", 0))
+			var total_before: int = GameTypes.hand_total(ui.session.state.players[0]["hand"])
+			ui.session.state.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+			ui.session.state.current_player = 0
+			ui.session.state.blocker_tile = 9
+			ui._refresh_ui()
+			ui._on_board_tile_clicked(6)
+			_assert(ui.session.state.blocker_tile == 6, "Zero-victim move should submit immediately")
+			_assert(int(ui.session.state.last_steal.get("serial", 0)) == serial_before, "Zero-victim move must not steal")
+			_assert(GameTypes.hand_total(ui.session.state.players[0]["hand"]) == total_before, "Zero-victim move must not change hands")
+			_pass_section("33. Steal Chooser Test (2+ victims choose, 1/0 auto, keys, Esc keeps picking)")
+		)
+	)
+
+func _toast_texts(ui: Node) -> String:
+	var out := ""
+	for l in ui._toast_labels:
+		if is_instance_valid(l):
+			out += "|" + str(l.text)
+	return out
+
+func _test_steal_toasts_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52003, seats, true)
+	var st: GameState = ui.session.state
+	var topo := HexMath.get_topology()
+	ui._show_toast("hello toast", Color.RED)
+	_assert(ui._toast_labels.size() == 1, "Generic toast should be tracked")
+	_assert(str(ui._toast_labels[0].text) == "hello toast", "Generic toast text should match")
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 0
+	st.blocker_tile = 9
+	st.vertex_owner[topo.tile_vertices[5][0]] = 1
+	st.players[1]["hand"] = GameTypes.empty_hand()
+	st.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 2
+	st.players[0]["hand"] = GameTypes.empty_hand()
+	ui._refresh_ui()
+	ui._on_board_tile_clicked(5)
+	_assert(_toast_texts(ui).contains("You stole 1 Grain from Dune."), "Thief toast should name the resource in a solo game, got '%s'" % _toast_texts(ui))
+	# bot steals from the human: private wording with the resource
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 1
+	st.blocker_tile = 5
+	st.vertex_owner[topo.tile_vertices[6][0]] = 0
+	st.players[0]["hand"] = GameTypes.empty_hand()
+	st.players[0]["hand"][GameTypes.ResourceType.FLEECE] = 1
+	ui.session.submit_action(1, GameAction.move_blocker(6, 0))
+	_assert(_toast_texts(ui).contains("Dune stole 1 Fleece from you!"), "Victim toast should name the stolen resource for a solo viewer, got '%s'" % _toast_texts(ui))
+	_pass_section("34. Steal Toasts Test (generic toast api, thief/victim wording)")
+
+func _test_steal_toasts_hotseat_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.HUMAN, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	]
+	ui.session.start_match(52004, seats, true)
+	var st: GameState = ui.session.state
+	var topo := HexMath.get_topology()
+	# bot steals from an AI: public wording only
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 2
+	st.blocker_tile = 9
+	st.vertex_owner[topo.tile_vertices[5][0]] = 1
+	st.players[1]["hand"] = GameTypes.empty_hand()
+	st.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 2
+	ui.session.submit_action(2, GameAction.move_blocker(5, 1))
+	_assert(_toast_texts(ui).contains("Pike stole a card from Dune."), "Bystander steal should use public wording, got '%s'" % _toast_texts(ui))
+	# AI steals from the viewer while hands are hidden (bot still acting turn): no resource name
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 2
+	st.blocker_tile = 5
+	st.vertex_owner[topo.tile_vertices[6][0]] = 0
+	st.players[0]["hand"] = GameTypes.empty_hand()
+	st.players[0]["hand"][GameTypes.ResourceType.FLEECE] = 1
+	ui._refresh_ui()
+	_assert(bool(ui._hand_hidden()), "Hands should be hidden while the AI acts in hot-seat")
+	ui.session.submit_action(2, GameAction.move_blocker(6, 0))
+	_assert(_toast_texts(ui).contains("Pike stole a card from you!"), "Hidden-hand victim toast must not name the resource, got '%s'" % _toast_texts(ui))
+	_pass_section("35. Steal Toasts Hot-seat Test (public wording, no resource leak while hidden)")
+
+func _strip_chip_texts(ui: Node) -> String:
+	var out := ""
+	for c in ui._offer_strip_chips.get_children():
+		if c is PanelContainer:
+			for l in c.get_children():
+				if l is Label:
+					out += "|" + str((l as Label).text)
+	return out
+
+func _color_close(a: Color, b: Color) -> bool:
+	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b) + absf(a.a - b.a) < 0.004
+
+func _first_label_text(node: Node) -> String:
+	for c in node.get_children():
+		if c is Label:
+			return str((c as Label).text)
+		var sub := _first_label_text(c)
+		if sub != "":
+			return sub
+	return ""
+
+func _find_swatch_of(node: Node, col: Color) -> bool:
+	for c in node.get_children():
+		if c is ColorRect and _color_close((c as ColorRect).color, col):
+			return true
+		if _find_swatch_of(c, col):
+			return true
+	return false
+
+func _find_label_containing(node: Node, needle: String) -> bool:
+	for c in node.get_children():
+		if c is Label and str((c as Label).text).contains(needle):
+			return true
+		if _find_label_containing(c, needle):
+			return true
+	return false
+
+func _test_offer_strip_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	]
+	ui.session.start_match(52005, seats, true)
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = 0
+	st.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 2
+	st.players[0]["hand"][GameTypes.ResourceType.IRON] = 2
+	st.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 3
+	ui._refresh_ui()
+	_assert(not bool(ui._offer_strip.visible), "No open offer should mean a hidden strip")
+	# counter wording then withdraw
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.TIMBER: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	_assert(bool(ui._offer_strip.visible), "An open offer should show the strip")
+	_assert(str(ui._offer_strip_label.text) == "Azure offers 1 Timber for 1 Grain", "Strip headline mismatch: '%s'" % str(ui._offer_strip_label.text))
+	_assert(_strip_chip_texts(ui).contains("Dune: waiting") and _strip_chip_texts(ui).contains("Pike: waiting"), "Both responders should show waiting, got '%s'" % _strip_chip_texts(ui))
+	ui.session.submit_action(1, GameAction.respond_open_trade("counter", {GameTypes.ResourceType.IRON: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	_assert(_strip_chip_texts(ui).contains("Dune: ↺ gives 1 Iron for your 1 Grain"), "Counter chip mismatch: '%s'" % _strip_chip_texts(ui))
+	ui._refresh_ui()
+	_assert(_find_label_containing(ui._trade_tray, "Counter: gives 1 Iron for your 1 Grain"), "Partner card should show 'gives X for your Y'")
+	ui.session.submit_action(0, GameAction.cancel_open_trade())
+	_assert(not bool(ui._offer_strip.visible), "Withdrawing must hide the strip")
+	_assert(_toast_texts(ui).contains("Azure withdrew the offer."), "Withdraw should toast, got '%s'" % _toast_texts(ui))
+	# accepted offer: chips, finalize, outcome toast
+	ui.session.state.open_trades_this_turn = 0
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.TIMBER: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	ui.session.submit_action(1, GameAction.respond_open_trade("accept"))
+	ui.session.submit_action(2, GameAction.respond_open_trade("decline"))
+	_assert(_strip_chip_texts(ui).contains("Dune: ✓ accepts") and _strip_chip_texts(ui).contains("Pike: ✗ declines"), "Accept/decline chips mismatch: '%s'" % _strip_chip_texts(ui))
+	var t0: int = int(ui.session.state.players[0]["hand"].get(GameTypes.ResourceType.TIMBER, 0))
+	var g0: int = int(ui.session.state.players[0]["hand"].get(GameTypes.ResourceType.GRAIN, 0))
+	ui.session.submit_action(0, GameAction.finalize_open_trade(1))
+	_assert(not bool(ui._offer_strip.visible), "Resolving the offer must hide the strip")
+	_assert(int(ui.session.state.players[0]["hand"].get(GameTypes.ResourceType.TIMBER, 0)) == t0 - 1 and int(ui.session.state.players[0]["hand"].get(GameTypes.ResourceType.GRAIN, 0)) == g0 + 1, "Finalized trade must swap the resources")
+	_assert(_toast_texts(ui).contains("Azure traded with Dune."), "Trade outcome should toast, got '%s'" % _toast_texts(ui))
+	# bot-to-bot offer is visible to the human viewer
+	ui.session.state.phase = GameTypes.TurnPhase.TURN_MAIN
+	ui.session.state.current_player = 1
+	ui.session.state.open_trades_this_turn = 0
+	ui.session.submit_action(1, GameAction.open_trade({GameTypes.ResourceType.GRAIN: 1}, {GameTypes.ResourceType.TIMBER: 1}))
+	_assert(bool(ui._offer_strip.visible), "Bot-to-bot offers should show the strip")
+	_assert(str(ui._offer_strip_label.text).begins_with("Dune offers 1 Grain for 1 Timber"), "Bot offer headline mismatch: '%s'" % str(ui._offer_strip_label.text))
+	_pass_section("36. Offer Strip Test (headline, chips, counter wording, outcome toasts)")
+
+func _test_tray_close_controls_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	]
+	ui.session.start_match(52006, seats, true)
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = 0
+	st.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 4
+	st.players[0]["hand"][GameTypes.ResourceType.GRAIN] = 4
+	st.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 4
+	st.players[2]["hand"][GameTypes.ResourceType.TIMBER] = 4
+	st.players[2]["hand"][GameTypes.ResourceType.GRAIN] = 4
+	ui._refresh_ui()
+	ui._toggle_trade_tray()
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.TIMBER: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	_assert(bool(ui._trade_tray.visible), "The proposer's tray should stay open after proposing")
+	_assert(ui._trade_close_btn != null and not bool(ui._trade_close_btn.disabled), "The tray must always have an enabled Close button")
+	ui._trade_close_btn.pressed.emit()
+	_assert(not bool(ui._trade_tray.visible), "Close must hide the tray")
+	_assert(not bool(ui.session.state.open_trade.is_empty()), "Closing must NOT withdraw the offer")
+	ui.session.submit_action(1, GameAction.respond_open_trade("decline"))
+	ui._refresh_ui()
+	_assert(not bool(ui._trade_tray.visible), "A dismissed waiting tray must not pop back while an AI still has to answer")
+	ui.session.submit_action(2, GameAction.respond_open_trade("accept"))
+	_assert(bool(ui._trade_tray.visible), "Once every answer is in, the proposer must be brought back to the tray")
+	ui.session.submit_action(0, GameAction.finalize_open_trade(2))
+	_assert(ui.session.state.open_trade.is_empty(), "The offer should have resolved")
+	_assert(not bool(ui._trade_tray.visible), "My own resolved offer must auto-close the tray")
+	# out of the loop: I decline a bot offer, then bots negotiate
+	ui.session.state.phase = GameTypes.TurnPhase.TURN_MAIN
+	ui.session.state.current_player = 1
+	ui.session.state.open_trades_this_turn = 0
+	ui.session.submit_action(1, GameAction.open_trade({GameTypes.ResourceType.GRAIN: 1}, {GameTypes.ResourceType.TIMBER: 1}))
+	_assert(bool(ui._trade_tray.visible), "The responder's tray should auto-open")
+	ui._ot_decline_btn.pressed.emit()
+	_assert(not bool(ui._trade_tray.visible), "The tray must close once the viewer is neither proposer nor responder")
+	_assert(bool(ui._offer_strip.visible), "The strip still covers the bot-to-bot offer")
+	ui.session.submit_action(1, GameAction.cancel_open_trade())
+	# board background click closes a manually opened tray
+	ui.session.state.phase = GameTypes.TurnPhase.TURN_MAIN
+	ui.session.state.current_player = 0
+	ui.session.state.open_trades_this_turn = 0
+	ui._refresh_ui()
+	ui._toggle_trade_tray()
+	_assert(bool(ui._trade_tray.visible), "Trade button should open the tray")
+	ui._on_board_background_clicked()
+	_assert(not bool(ui._trade_tray.visible), "A board background click closes the tray")
+	_pass_section("37. Trade Tray Close Test (always-on Close button, no withdraw, auto-close rules, board click)")
+
+func _test_costs_popover_body(ui: Node) -> void:
+	_assert(not ui.has_method("_on_build_road_pressed"), "The BUILD side rows must be gone")
+	_assert(not ui.has_method("_refresh_build_rows"), "The build side column refresh must be gone")
+	_assert(ui._help_costs_btn != null and str(ui._help_costs_btn.text) == "?", "The top bar needs a '?' costs button")
+	ui._open_costs_popup()
+	await ui.get_tree().process_frame
+	_assert(bool(ui._costs_popup.visible), "The '?' button opens the costs popover")
+	_assert(not (ui._costs_popup is Popup), "Costs popover must be an inline panel, not an OS popup window")
+	var cp_style = ui._costs_popup.get_theme_stylebox("panel")
+	_assert(cp_style is StyleBoxFlat, "Costs popover needs the paper panel style")
+	_assert((cp_style as StyleBoxFlat).bg_color.v > 0.6, "Costs popover background must be light paper")
+	_assert(_find_label_containing(ui._costs_popup, "Road"), "Costs popover lists Road")
+	_assert(_find_label_containing(ui._costs_popup, "Settlement"), "Costs popover lists Settlement")
+	_assert(_find_label_containing(ui._costs_popup, "City (upgrade)"), "Costs popover lists City")
+	_assert(_find_label_containing(ui._costs_popup, "Action Card"), "Costs popover lists the Action Card cost")
+	_assert(_find_label_containing(ui._costs_popup, "Click a glowing spot on the board to build."), "Costs popover explains board building")
+	var city_cost: Dictionary = ui._build_cost_for("city")
+	_assert(int(city_cost.get(GameTypes.ResourceType.GRAIN, 0)) == 2 and int(city_cost.get(GameTypes.ResourceType.IRON, 0)) == 3, "City cost must be 2 Grain + 3 Iron")
+	ui._fill_build_bubble("settlement")
+	var cells := 0
+	for c in ui._build_bubble_cost_box.get_children():
+		cells += 1
+	_assert(cells == 4, "The build bubble should still show 4 cost cells for a settlement, got %d" % cells)
+	for c in ui._costs_popup.get_children():
+		for b in c.get_children():
+			if b is Button and str((b as Button).text) == "Full help (F1)":
+				(b as Button).pressed.emit()
+	await ui.get_tree().process_frame
+	_assert(not bool(ui._costs_popup.visible), "Full help closes the popover")
+	_assert(bool(ui._help_overlay.visible), "Full help opens the help overlay")
+	ui._help_overlay.visible = false
+	_pass_section("38. Costs Popover Test (? button, costs popup, bubble still priced, no BUILD column)")
+
+func _test_game_over_splash_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52007, seats, true)
+	var st: GameState = ui.session.state
+	_assert(not bool(ui._splash_overlay.visible), "No splash while playing")
+	st.vertex_owner[0] = 0
+	st.vertex_building[0] = GameTypes.BuildingType.SETTLEMENT
+	st.vertex_owner[1] = 1
+	st.vertex_building[1] = GameTypes.BuildingType.CITY
+	st.vertex_owner[2] = 1
+	st.vertex_building[2] = GameTypes.BuildingType.CITY
+	st.longest_route_holder = 1
+	st.players[1]["dev_cards"] = [GameTypes.DevCardType.CHARTER_POINT]
+	st.turn_number = 12
+	st.winner = 1
+	st.phase = GameTypes.TurnPhase.GAME_OVER
+	var evs: Array[String] = []
+	ui._on_state_updated(st, evs)
+	await ui.get_tree().process_frame
+	_assert(bool(ui._splash_overlay.visible), "Game over must show the splash")
+	_assert(bool(ui._splash_shown), "Splash flag set")
+	_assert(str(ui._splash_title.text) == "Dune wins!", "Title should announce the winner, got '%s'" % str(ui._splash_title.text))
+	_assert(str(ui._splash_turns.text) == "Played 12 turns", "Turn count line, got '%s'" % str(ui._splash_turns.text))
+	_assert(_find_label_containing(ui._splash_rows, "Dune (AI)"), "Standings name the AI as AI")
+	_assert(_find_label_containing(ui._splash_rows, "Azure (Human)"), "Standings name the human as Human")
+	_assert(_find_label_containing(ui._splash_rows, "Longest Route"), "Route bonus shown as words")
+	_assert(_find_label_containing(ui._splash_rows, "1 Charter point"), "Charter shown as words")
+	_assert(_find_label_containing(ui._splash_rows, "0 settlements · 2 cities"), "Buildings shown as words, rows: %s" % _splash_row_texts(ui))
+	_assert(ui._splash_title.get_theme_color("font_color") == Palette.HEADING, "Winner title must use the dark heading colour")
+	_assert(_color_close(ui._splash_banner.color, GameTypes.PLAYER_COLORS[1].darkened(0.15)), "Banner carries the winner colour")
+	_assert(bool(ui._any_overlay_visible()), "Splash counts as an overlay")
+	ui._splash_view_board_btn.pressed.emit()
+	_assert(not bool(ui._splash_overlay.visible), "View Board hides the splash")
+	_assert(bool(ui._results_btn.visible), "A Results button appears to bring it back")
+	ui._results_btn.pressed.emit()
+	_assert(bool(ui._splash_overlay.visible), "Results reopens the splash")
+	ui._splash_lobby_btn.pressed.emit()
+	_assert(bool(ui._lobby_overlay.visible), "Back to Lobby opens the lobby")
+	_assert(not bool(ui._splash_overlay.visible), "Lobby hides the splash")
+	ui._splash_new_game_btn.pressed.emit()
+	_assert(not bool(ui._splash_overlay.visible), "New Game hides the splash")
+	_assert(ui.session.state.phase != GameTypes.TurnPhase.GAME_OVER, "New Game starts a fresh match")
+	_assert(not bool(ui._splash_shown), "Splash flags reset on a new match")
+	_pass_section("39. Game Over Splash Test (winner, standings detail, view board / results / lobby / new game)")
+
+func _splash_row_texts(ui: Node) -> String:
+	var out := ""
+	for hbox in ui._splash_rows.get_children():
+		for c in hbox.get_children():
+			if c is Label:
+				out += "[" + str((c as Label).text) + "]"
+		out += "|"
+	return out
+
+func _test_discard_layout_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52008, seats, true)
+	root.size = Vector2i(1280, 800)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	ui._refresh_ui()
+	_assert(ui._hand_bar_panel.get_combined_minimum_size().x <= 1280.0, "Bottom bar fits 1280 in normal mode too, got %.1f" % ui._hand_bar_panel.get_combined_minimum_size().x)
+	st.phase = GameTypes.TurnPhase.TURN_DISCARD
+	st.current_player = 0
+	st.pending_discards = {0: 4}
+	st.players[0]["hand"] = GameTypes.empty_hand()
+	st.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 3
+	st.players[0]["hand"][GameTypes.ResourceType.CLAY] = 2
+	st.players[0]["hand"][GameTypes.ResourceType.FLEECE] = 1
+	st.players[0]["hand"][GameTypes.ResourceType.GRAIN] = 1
+	st.players[0]["hand"][GameTypes.ResourceType.IRON] = 1
+	ui._refresh_ui()
+	await ui.get_tree().process_frame
+	_assert(ui._hand_bar_panel.get_combined_minimum_size().x <= 1280.0, "Bottom bar must not force the UI wider than 1280, got %.1f" % ui._hand_bar_panel.get_combined_minimum_size().x)
+	var sb: Control = ui._scoreboard_box
+	var sb_rect := sb.get_global_rect()
+	var vp := Rect2(Vector2.ZERO, Vector2(1280, 800))
+	_assert(sb_rect.end.x <= vp.end.x + 0.5 and sb_rect.end.y <= vp.end.y + 0.5 and sb_rect.position.x >= -0.5, "Scoreboard must stay inside the window, got %s" % str(sb_rect))
+	_assert(not bool(ui._trade_btn.visible), "Trade must hide while discarding")
+	_assert(not bool(ui._end_turn_btn.visible), "End Turn must hide while discarding")
+	_assert(not bool(ui._buy_card_btn.visible), "Buy card must hide while discarding")
+	_assert(not bool(ui._dice_widget.visible), "Dice must hide while discarding")
+	for ctype in ui._action_chips.keys():
+		_assert(not bool(ui._action_chips[ctype].visible), "Action card chips must hide while discarding")
+	ui._discard_pick_one(GameTypes.ResourceType.TIMBER)
+	ui._discard_pick_one(GameTypes.ResourceType.TIMBER)
+	var tface: CardFace = ui._res_card_refs[GameTypes.ResourceType.TIMBER]
+	_assert(int(tface.count) == 3, "Cards keep their normal counts, got 'x%d'" % int(tface.count))
+	_assert(int(tface.badge) == 2, "Badge shows the pick count, got %d" % int(tface.badge))
+	var stray_badge := false
+	for r in GameTypes.ALL_RESOURCES:
+		var f: CardFace = ui._res_card_refs[r]
+		if int(f.badge) > 0 and int(ui._discard_pick.get(r, 0)) <= 0:
+			stray_badge = true
+	_assert(not stray_badge, "Only picked cards may carry a badge")
+	root.size = Vector2i(64, 64)
+	await ui.get_tree().process_frame
+	_pass_section("40. Discard Layout Test (1280-wide bottom bar, hidden extras, badge counts)")
+
+func _test_stale_discard_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52009, seats, true)
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_DISCARD
+	st.current_player = 0
+	st.pending_discards = {0: 4}
+	st.players[0]["hand"] = GameTypes.empty_hand()
+	st.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 3
+	st.players[0]["hand"][GameTypes.ResourceType.CLAY] = 2
+	ui._refresh_ui()
+	ui._discard_pick_one(GameTypes.ResourceType.TIMBER)
+	ui._discard_pick_one(GameTypes.ResourceType.TIMBER)
+	_assert(int(ui._discard_pick.get(GameTypes.ResourceType.TIMBER, 0)) == 2, "Picked before leaving discard mode")
+	st.pending_discards.clear()
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	ui._refresh_ui()
+	var any_badge := false
+	for r in GameTypes.ALL_RESOURCES:
+		if int(ui._res_card_refs[r].badge) > 0:
+			any_badge = true
+	_assert(not any_badge, "No '−' badge may remain after the discard requirement ends")
+	_assert(int(ui._discard_picked_total()) == 0, "Picks must clear when the requirement ends")
+	_assert(bool(ui._trade_btn.visible), "The bottom bar returns to normal")
+	_assert(int(ui._res_card_refs[GameTypes.ResourceType.TIMBER].count) == 3, "Counts back to normal")
+	_pass_section("41. Stale Discard Display Test (badges and picks clear on refresh)")
+
+func _test_splash_winner_order_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52010, seats, true)
+	var st: GameState = ui.session.state
+	# VP tie: Azure 2 settlements (2 VP), Dune 1 city (2 VP) — Dune leads get_standings()
+	st.vertex_owner[0] = 0
+	st.vertex_building[0] = GameTypes.BuildingType.SETTLEMENT
+	st.vertex_owner[1] = 0
+	st.vertex_building[1] = GameTypes.BuildingType.SETTLEMENT
+	st.vertex_owner[2] = 1
+	st.vertex_building[2] = GameTypes.BuildingType.CITY
+	st.winner = 0
+	st.phase = GameTypes.TurnPhase.GAME_OVER
+	var evs: Array[String] = []
+	ui._on_state_updated(st, evs)
+	await ui.get_tree().process_frame
+	_assert(str(ui._splash_title.text) == "Azure wins!", "Title must follow state.winner, got '%s'" % str(ui._splash_title.text))
+	_assert(_color_close(ui._splash_banner.color, GameTypes.PLAYER_COLORS[0].darkened(0.15)), "Banner follows state.winner")
+	var first_row := str(ui._splash_rows.get_child(0).get_child(2).text)
+	_assert(first_row.begins_with("Azure"), "Winner row must come first even on a tie, got '%s'" % first_row)
+	_pass_section("42. Splash Winner Order Test (state.winner leads on a tie)")
+
+func _test_card_face_body(ui: Node) -> void:
+	var made: Array = []
+	for r in GameTypes.ALL_RESOURCES:
+		var f := CardFace.new()
+		f.kind = "resource"
+		f.resource = r
+		f.count = 5
+		f.size = Vector2(64, 90)
+		ui.add_child(f)
+		made.append(f)
+		var f0 := CardFace.new()
+		f0.kind = "resource"
+		f0.resource = r
+		f0.count = 0
+		f0.size = Vector2(64, 90)
+		ui.add_child(f0)
+		made.append(f0)
+	for a in range(5):
+		var fa := CardFace.new()
+		fa.kind = "action"
+		fa.action = a
+		fa.count = 5
+		fa.size = Vector2(64, 90)
+		ui.add_child(fa)
+		made.append(fa)
+	var fb := CardFace.new()
+	fb.kind = "back"
+	fb.size = Vector2(64, 90)
+	ui.add_child(fb)
+	made.append(fb)
+	var fhidden := CardFace.new()
+	fhidden.kind = "resource"
+	fhidden.resource = GameTypes.ResourceType.IRON
+	fhidden.hidden_card = true
+	fhidden.count = 3
+	fhidden.size = Vector2(64, 90)
+	ui.add_child(fhidden)
+	made.append(fhidden)
+	await ui.get_tree().process_frame
+	for f in made:
+		f.queue_redraw()
+	await ui.get_tree().process_frame
+	for f in made:
+		_assert(f.size.x > 0 and f.size.y >= f.size.x, "CardFace keeps the portrait ratio, got %s" % str(f.size))
+		_assert(f.get_combined_minimum_size().x > 0, "CardFace has a minimum size")
+	var hits := 0
+	for face in ui._res_card_refs.values():
+		if face is CardFace and (face as CardFace).kind == "resource":
+			hits += 1
+	_assert(hits == GameTypes.ALL_RESOURCES.size(), "Hand bar holds 5 resource CardFaces, got %d" % hits)
+	var st: GameState = ui.session.state
+	st.players[0]["hand"] = GameTypes.empty_hand()
+	st.players[0]["hand"][GameTypes.ResourceType.GRAIN] = 4
+	ui._refresh_ui()
+	_assert(int(ui._res_card_refs[GameTypes.ResourceType.GRAIN].count) == 4, "CardFace count follows the hand")
+	_assert(int(ui._res_card_refs[GameTypes.ResourceType.TIMBER].count) == 0, "Empty resources show count 0")
+	var chips_ok := true
+	for ctype in ui._action_chips.keys():
+		var chip: CardFace = ui._action_chips[ctype]
+		if chip.kind != "action":
+			chips_ok = false
+	_assert(chips_ok, "Action chips are CardFaces")
+	_pass_section("43. Card Face Test (resource/action/back variants draw, counts follow the hand)")
+
+func _test_bank_stacks_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52011, seats, true)
+	ui._refresh_ui()
+	var st: GameState = ui.session.state
+	var ok := true
+	for r in GameTypes.ALL_RESOURCES:
+		var bf: CardFace = ui._bank_faces[r]
+		if int(bf.count) != int(st.bank.get(r, 0)):
+			ok = false
+	_assert(ok, "Bank faces mirror state.bank")
+	_assert(ui._bank_deck_face != null and int(ui._bank_deck_face.count) == st.dev_deck.size(), "Deck stack mirrors state.dev_deck")
+	_assert(str(ui._bank_deck_label.text) == str(st.dev_deck.size()), "Deck count prints under the deck stack")
+	st.bank[GameTypes.ResourceType.TIMBER] = 3
+	st.bank[GameTypes.ResourceType.IRON] = 0
+	ui._refresh_ui()
+	var tface: CardFace = ui._bank_faces[GameTypes.ResourceType.TIMBER]
+	var iface: CardFace = ui._bank_faces[GameTypes.ResourceType.IRON]
+	_assert(str(ui._bank_count_labels[GameTypes.ResourceType.TIMBER].text) == "3", "Number is printed under the stack")
+	_assert(_color_close(ui._bank_count_labels[GameTypes.ResourceType.TIMBER].get_theme_color("font_color"), Color(0.68, 0.30, 0.14)), "Low piles show the warning colour under the stack")
+	_assert(str(ui._bank_count_labels[GameTypes.ResourceType.IRON].text) == "empty", "Empty piles read 'empty'")
+	_assert(_color_close(ui._bank_count_labels[GameTypes.ResourceType.IRON].get_theme_color("font_color"), Palette.TEXT_MUTED), "Empty label uses the muted colour")
+	_assert(int(iface.count) == 0 and int(iface.stack_depth) == 0, "Empty piles are greyed with no stack layers")
+	_assert(not bool(tface.count_badge), "Bank faces drop the clipped count badge")
+	st.bank[GameTypes.ResourceType.GRAIN] = 19
+	ui._refresh_ui()
+	_assert(int(ui._bank_faces[GameTypes.ResourceType.GRAIN].stack_depth) == 4, "Full piles draw four stack layers")
+	_assert(bool(ui._bank_faces.values()[0] is CardFace), "Bank stacks are CardFaces")
+	_pass_section("44. Bank Stacks Test (counts mirror state.bank, warning and empty states)")
+
+func _test_port_badges_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52012, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var bv = ui._board_view
+	_assert(not bool(bv.show_port_names), "Port names are hidden by default")
+	_assert(bv.get_port_count() > 0, "Ports exist on the board")
+	var any_name := false
+	for i in range(bv.get_port_count()):
+		if bool(bv.port_name_visible_for(i)):
+			any_name = true
+	_assert(not any_name, "No port name pill is drawn without the setting or hover")
+	bv.show_port_names = true
+	for i in range(bv.get_port_count()):
+		_assert(bool(bv.port_name_visible_for(i)), "The setting shows every port name")
+	bv.show_port_names = false
+	bv._hovered_port = 0
+	_assert(bool(bv.port_name_visible_for(0)), "Hovering a port shows its name")
+	_assert(not bool(bv.port_name_visible_for(1)), "Hovering shows only the hovered port's name")
+	bv._hovered_port = -1
+	_assert(bv._port_badge_rects.size() == bv.get_port_count(), "Every port gets a badge rect")
+	ui._settings_portnames_check.set_pressed_no_signal(true)
+	ui._settings_portnames_check.toggled.emit(true)
+	_assert(bool(bv.show_port_names), "The Settings toggle drives the board")
+	ui._settings_portnames_check.toggled.emit(false)
+	_pass_section("45. Port Badges Test (no name pills without setting or hover, toggle works)")
+
+func _test_action_anim_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(52013, seats, true)
+	var st: GameState = ui.session.state
+	var toasts_before: int = ui._toast_layer.get_child_count()
+	var anims_before: int = int(ui._board_view.anim_count)
+	var evs1: Array[String] = ["Dune built a settlement at vertex 7."]
+	ui._animate_from_events(evs1, st)
+	await ui.get_tree().process_frame
+	_assert(int(ui._board_view.anim_count) > anims_before, "Bot build raises the board animation counter")
+	_assert(ui._board_view._build_anims.size() >= 1, "Build pop-in animation is queued")
+	_assert(ui._toast_layer.get_child_count() > toasts_before, "Bot build raises a toast")
+	var toasts_now: int = ui._toast_layer.get_child_count()
+	var evs2: Array[String] = ["Azure built a settlement at vertex 8."]
+	ui._animate_from_events(evs2, st)
+	_assert(ui._toast_layer.get_child_count() == toasts_now, "Human actions do not add toasts")
+	ui._prev_blocker_tile = 3
+	var evs3: Array[String] = ["Dune moved the Blocker to tile 9."]
+	ui._animate_from_events(evs3, st)
+	_assert(int(ui._board_view._blocker_from_tile) == 3, "Blocker slide starts from the previous tile")
+	ui._reduce_motion = true
+	ui._board_view.reduce_motion = true
+	var evs4: Array[String] = ["Dune built a road on edge 4."]
+	ui._animate_from_events(evs4, st)
+	await ui.get_tree().process_frame
+	var has_static := false
+	for a in ui._board_view._build_anims:
+		if bool(a.get("static", false)):
+			has_static = true
+	_assert(has_static, "Reduce motion swaps pops for static highlight rings")
+	var many: Array[String] = []
+	for i in range(5):
+		many.append("Dune bought an Action Card.")
+	ui._animate_from_events(many, st)
+	await ui.get_tree().process_frame
+	_assert(ui._toast_layer.get_child_count() <= 3, "At most 3 toasts stack, got %d" % ui._toast_layer.get_child_count())
+	ui._fly_card_back(0, 1)
+	ui._reduce_motion = false
+	ui._board_view.reduce_motion = false
+	_pass_section("46. Action Feedback Test (bot toasts, build anims, blocker slide, reduce motion)")

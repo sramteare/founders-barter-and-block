@@ -201,6 +201,7 @@ static func _handle_setup_settlement(state: GameState, player_id: int, action: D
 			var res := GameTypes.terrain_to_resource(state.tile_terrains[t_id])
 			if res >= 0:
 				p["hand"][res] = int(p["hand"].get(res, 0)) + 1
+				state.bank[res] = int(state.bank.get(res, 0)) - 1
 				gained_names.append(GameTypes.resource_name(res))
 		if not gained_names.is_empty():
 			events.append("%s gained starting resources: %s." % [p["name"], ", ".join(gained_names)])
@@ -262,26 +263,52 @@ static func _handle_roll_dice(state: GameState, player_id: int, events: Array[St
 		else:
 			state.phase = GameTypes.TurnPhase.TURN_DISCARD
 	else:
-		var topo := HexMath.get_topology()
-		for t_id in range(19):
-			if t_id == state.blocker_tile:
-				continue
-			if state.tile_numbers[t_id] != total:
-				continue
-			var res := GameTypes.terrain_to_resource(state.tile_terrains[t_id])
-			if res < 0:
-				continue
-			for v_id in topo.tile_vertices[t_id]:
-				var owner_id: int = state.vertex_owner[v_id]
-				if owner_id >= 0:
-					var b_type: int = state.vertex_building[v_id]
-					var amount := 2 if b_type == GameTypes.BuildingType.CITY else 1
-					var owner_hand: Dictionary = state.players[owner_id]["hand"]
-					owner_hand[res] = int(owner_hand.get(res, 0)) + amount
-					events.append("%s produced %d %s." % [state.players[owner_id]["name"], amount, GameTypes.resource_name(res)])
+		apply_production(state, total, events)
 		state.phase = GameTypes.TurnPhase.TURN_MAIN
 
 	return _ok(events)
+
+static func apply_production(state: GameState, total: int, events: Array[String]) -> void:
+	var topo := HexMath.get_topology()
+	var owed: Dictionary = {}
+	for t_id in range(19):
+		if t_id == state.blocker_tile:
+			continue
+		if state.tile_numbers[t_id] != total:
+			continue
+		var res := GameTypes.terrain_to_resource(state.tile_terrains[t_id])
+		if res < 0:
+			continue
+		if not owed.has(res):
+			owed[res] = {}
+		for v_id in topo.tile_vertices[t_id]:
+			var owner_id: int = state.vertex_owner[v_id]
+			if owner_id >= 0:
+				var amount := 2 if state.vertex_building[v_id] == GameTypes.BuildingType.CITY else 1
+				owed[res][owner_id] = int(owed[res].get(owner_id, 0)) + amount
+
+	for res_key in owed.keys():
+		var res: int = int(res_key)
+		var claims: Dictionary = owed[res_key]
+		var total_owed := 0
+		for o in claims.keys():
+			total_owed += int(claims[o])
+		var in_bank := int(state.bank.get(res, 0))
+		if in_bank >= total_owed:
+			for o in claims.keys():
+				_grant_production(state, int(o), res, int(claims[o]), events)
+		elif claims.size() > 1:
+			events.append("The bank is out of %s." % GameTypes.resource_name(res))
+		elif in_bank > 0:
+			_grant_production(state, int(claims.keys()[0]), res, in_bank, events)
+		else:
+			events.append("The bank is out of %s." % GameTypes.resource_name(res))
+
+static func _grant_production(state: GameState, owner_id: int, res: int, amount: int, events: Array[String]) -> void:
+	state.bank[res] = int(state.bank.get(res, 0)) - amount
+	var owner_hand: Dictionary = state.players[owner_id]["hand"]
+	owner_hand[res] = int(owner_hand.get(res, 0)) + amount
+	events.append("%s produced %d %s." % [state.players[owner_id]["name"], amount, GameTypes.resource_name(res)])
 
 static func _handle_discard(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
 	if not state.pending_discards.has(player_id):
@@ -307,6 +334,7 @@ static func _handle_discard(state: GameState, player_id: int, action: Dictionary
 		var amt := int(res_dict.get(r, 0))
 		if amt > 0:
 			hand[r] = int(hand.get(r, 0)) - amt
+			state.bank[r] = int(state.bank.get(r, 0)) + amt
 
 	state.pending_discards.erase(player_id)
 	events.append("%s discarded %d cards." % [p["name"], req_count])
@@ -331,23 +359,18 @@ static func _execute_blocker_move(state: GameState, player_id: int, action: Dict
 	if tile_id == state.blocker_tile:
 		return _fail("Blocker must be moved to a different tile.")
 
+	var valid_victims := get_steal_victims(state, player_id, tile_id)
+	var chosen_victim := -1
+	if valid_victims.size() == 1:
+		chosen_victim = valid_victims[0]
+	elif valid_victims.size() > 1:
+		if not valid_victims.has(target_player):
+			return _fail("Choose who to steal from.")
+		chosen_victim = target_player
+
 	state.blocker_tile = tile_id
 	var p: Dictionary = state.players[player_id]
 	events.append("%s moved the Blocker to tile %d." % [p["name"], tile_id])
-
-	var topo := HexMath.get_topology()
-	var valid_victims: Array[int] = []
-	for v_id in topo.tile_vertices[tile_id]:
-		var v_owner: int = state.vertex_owner[v_id]
-		if v_owner >= 0 and v_owner != player_id and not valid_victims.has(v_owner):
-			if GameTypes.hand_total(state.players[v_owner]["hand"]) > 0:
-				valid_victims.append(v_owner)
-
-	var chosen_victim := -1
-	if target_player >= 0 and valid_victims.has(target_player):
-		chosen_victim = target_player
-	elif not valid_victims.is_empty():
-		chosen_victim = valid_victims[0]
 
 	if chosen_victim >= 0:
 		var victim_dict: Dictionary = state.players[chosen_victim]
@@ -361,9 +384,27 @@ static func _execute_blocker_move(state: GameState, player_id: int, action: Dict
 			var stolen_res: int = card_pool[state.rng.randi_range(0, card_pool.size() - 1)]
 			victim_hand[stolen_res] = int(victim_hand[stolen_res]) - 1
 			p["hand"][stolen_res] = int(p["hand"].get(stolen_res, 0)) + 1
+			state.last_steal = {
+				"serial": int(state.last_steal.get("serial", 0)) + 1,
+				"thief": player_id,
+				"victim": chosen_victim,
+				"res": stolen_res,
+			}
 			events.append("%s stole 1 resource from %s." % [p["name"], victim_dict["name"]])
 
 	return _ok(events)
+
+static func get_steal_victims(state: GameState, player_id: int, tile_id: int) -> Array[int]:
+	var victims: Array[int] = []
+	if tile_id < 0 or tile_id >= 19:
+		return victims
+	var topo := HexMath.get_topology()
+	for v_id in topo.tile_vertices[tile_id]:
+		var v_owner: int = state.vertex_owner[v_id]
+		if v_owner >= 0 and v_owner != player_id and not victims.has(v_owner):
+			if GameTypes.hand_total(state.players[v_owner]["hand"]) > 0:
+				victims.append(v_owner)
+	return victims
 
 static func _handle_main_settlement(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
 	var v_id: int = int(action.get("vertex_id", -1))
@@ -384,7 +425,7 @@ static func _handle_main_settlement(state: GameState, player_id: int, action: Di
 	if not valid.has(v_id):
 		return _fail("Invalid vertex %d for settlement." % v_id)
 
-	_deduct_resources(hand, {
+	_deduct_to_bank(state, hand, {
 		GameTypes.ResourceType.TIMBER: 1,
 		GameTypes.ResourceType.CLAY: 1,
 		GameTypes.ResourceType.FLEECE: 1,
@@ -417,7 +458,7 @@ static func _handle_main_road(state: GameState, player_id: int, action: Dictiona
 	if not valid.has(e_id):
 		return _fail("Invalid edge %d for road." % e_id)
 
-	_deduct_resources(hand, {
+	_deduct_to_bank(state, hand, {
 		GameTypes.ResourceType.TIMBER: 1,
 		GameTypes.ResourceType.CLAY: 1,
 	})
@@ -466,7 +507,7 @@ static func _handle_upgrade_city(state: GameState, player_id: int, action: Dicti
 	if not valid.has(v_id):
 		return _fail("Invalid vertex %d for city upgrade." % v_id)
 
-	_deduct_resources(hand, {
+	_deduct_to_bank(state, hand, {
 		GameTypes.ResourceType.GRAIN: 2,
 		GameTypes.ResourceType.IRON: 3,
 	})
@@ -492,7 +533,12 @@ static func _handle_maritime_trade(state: GameState, player_id: int, action: Dic
 	if int(hand.get(give_res, 0)) < ratio:
 		return _fail("Need %d %s for maritime trade." % [ratio, GameTypes.resource_name(give_res)])
 
+	if int(state.bank.get(get_res, 0)) <= 0:
+		return _fail("The bank has no %s." % GameTypes.resource_name(get_res))
+
 	hand[give_res] = int(hand.get(give_res, 0)) - ratio
+	state.bank[give_res] = int(state.bank.get(give_res, 0)) + ratio
+	state.bank[get_res] = int(state.bank.get(get_res, 0)) - 1
 	hand[get_res] = int(hand.get(get_res, 0)) + 1
 	events.append("%s traded %d %s for 1 %s (%d:1)." % [
 		p["name"], ratio, GameTypes.resource_name(give_res), GameTypes.resource_name(get_res), ratio
@@ -724,7 +770,7 @@ static func _handle_buy_dev_card(state: GameState, player_id: int, events: Array
 	}):
 		return _fail("Insufficient resources to buy an Action Card.")
 
-	_deduct_resources(hand, {
+	_deduct_to_bank(state, hand, {
 		GameTypes.ResourceType.FLEECE: 1,
 		GameTypes.ResourceType.GRAIN: 1,
 		GameTypes.ResourceType.IRON: 1,
@@ -817,10 +863,19 @@ static func _handle_play_harvest_bounty(state: GameState, player_id: int, action
 	if not GameTypes.ALL_RESOURCES.has(res1) or not GameTypes.ALL_RESOURCES.has(res2):
 		return _fail("Invalid resource selection for Harvest Bounty.")
 
+	var need: Dictionary = {}
+	need[res1] = int(need.get(res1, 0)) + 1
+	need[res2] = int(need.get(res2, 0)) + 1
+	for r in need.keys():
+		if int(state.bank.get(int(r), 0)) < int(need[r]):
+			return _fail("Not enough %s left in the bank." % GameTypes.resource_name(int(r)))
+
 	dev_cards.remove_at(idx)
 	p["played_dev_this_turn"] = true
 	p["hand"][res1] = int(p["hand"].get(res1, 0)) + 1
+	state.bank[res1] = int(state.bank.get(res1, 0)) - 1
 	p["hand"][res2] = int(p["hand"].get(res2, 0)) + 1
+	state.bank[res2] = int(state.bank.get(res2, 0)) - 1
 	events.append("%s played Harvest Bounty and took %s & %s." % [
 		p["name"], GameTypes.resource_name(res1), GameTypes.resource_name(res2)
 	])
@@ -944,6 +999,11 @@ static func _has_resources(hand: Dictionary, cost: Dictionary) -> bool:
 static func _deduct_resources(hand: Dictionary, cost: Dictionary) -> void:
 	for r in cost.keys():
 		hand[r] = int(hand.get(r, 0)) - int(cost[r])
+
+static func _deduct_to_bank(state: GameState, hand: Dictionary, cost: Dictionary) -> void:
+	for r in cost.keys():
+		hand[r] = int(hand.get(r, 0)) - int(cost[r])
+		state.bank[r] = int(state.bank.get(r, 0)) + int(cost[r])
 
 static func _ok(events: Array[String]) -> Dictionary:
 	return {"ok": true, "error": "", "events": events}

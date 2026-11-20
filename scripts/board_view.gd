@@ -5,6 +5,7 @@ signal vertex_clicked(vertex_id: int)
 signal edge_clicked(edge_id: int)
 signal tile_clicked(tile_id: int)
 signal build_spot_clicked(kind: String, id: int)
+signal background_clicked()
 
 enum InteractionMode {
 	NONE = 0,
@@ -35,10 +36,20 @@ var _hovered_tile: int = -1
 var _hovered_city_vertex: int = -1
 
 var _popups: Array = []
+var _build_anims: Array = []
+var anim_scale: float = 1.0
+var anim_count: int = 0
+var _blocker_from_tile: int = -1
+var _blocker_t: float = 1.0
 var _toasts: Array = []
 var _pending_kind: String = ""
 var _pending_id: int = -1
 var _harbour_label_rects: Array[Rect2] = []
+var _port_badge_rects: Array[Rect2] = []
+var _port_badge_data: Array[Dictionary] = []
+var _land_polys_screen: Array[PackedVector2Array] = []
+var _hovered_port: int = -1
+var show_port_names: bool = false
 var _harbour_boat_rects: Array[Rect2] = []
 var _port_specs: Array[Dictionary] = []
 
@@ -86,6 +97,16 @@ func _process(delta: float) -> void:
 			if float(toast["age"]) >= float(toast["duration"]):
 				_toasts.remove_at(i)
 		needs_redraw = not _toasts.is_empty() or needs_redraw
+	if not _build_anims.is_empty():
+		for i in range(_build_anims.size() - 1, -1, -1):
+			var a: Dictionary = _build_anims[i]
+			a["age"] = float(a["age"]) + delta
+			if float(a["age"]) >= float(a["duration"]):
+				_build_anims.remove_at(i)
+		needs_redraw = true
+	if _blocker_t < 1.0:
+		_blocker_t = minf(1.0, _blocker_t + delta / maxf(0.05, 0.5 * anim_scale))
+		needs_redraw = true
 	if needs_redraw:
 		queue_redraw()
 
@@ -148,6 +169,7 @@ func clear_highlights() -> void:
 	_hovered_edge = -1
 	_hovered_tile = -1
 	_hovered_city_vertex = -1
+	_hovered_port = -1
 	_update_cursor_shape()
 	queue_redraw()
 
@@ -173,6 +195,10 @@ func clear_pending_build() -> void:
 func get_spot_screen_position(kind: String, id: int) -> Vector2:
 	var topo := HexMath.get_topology()
 	var hex_radius := _get_hex_radius()
+	if kind == "tile":
+		if id >= 0 and id < topo.tile_centers.size():
+			return _unit_to_screen(topo.tile_centers[id], hex_radius)
+		return size * 0.5
 	if kind == "road":
 		if id >= 0 and id < topo.edge_vertices.size():
 			var ev: Vector2i = topo.edge_vertices[id]
@@ -190,9 +216,11 @@ func _get_hex_radius() -> float:
 	# Island reaches ~4.48 units (harbour point + boat + gap + label pill + 12 px margin).
 	# Two linear bounds: one where the 26 px boat-minimum dominates, one where it scales with R.
 	var ry := minf((half_y - 39.0) / 4.92, (half_y - 49.0) / 4.48)
+	# Outward sea-side trade badge: circle + "2:1" tag reach ~5.7 units + 30 px.
+	var ry_badge := (half_y - 22.0) / 5.5
 	# East/west harbour label pill half-width (~58 px worst case) + 12 px margin.
 	var rx := (half_x - 70.0) / 5.06
-	return clampf(minf(rx, ry), 24.0, 74.0)
+	return clampf(minf(minf(rx, ry), ry_badge), 24.0, 74.0)
 
 func _unit_to_screen(unit_pos: Vector2, hex_radius: float) -> Vector2:
 	return (size * 0.5) + unit_pos * hex_radius
@@ -249,12 +277,14 @@ func _draw() -> void:
 
 	if state == null:
 		_harbour_label_rects.clear()
+		_port_badge_rects.clear()
+		_port_badge_data.clear()
 		_harbour_boat_rects.clear()
 		_port_specs.clear()
 		if font != null:
 			var msg := "Configure seats in Lobby to start a match"
 			var ts := font.get_string_size(msg, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size)
-			draw_string(font, board_center - ts * 0.5, msg, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size, Palette.TEXT)
+			_sstr(font, board_center - ts * 0.5, msg, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size, Palette.TEXT)
 		return
 
 	var topo := HexMath.get_topology()
@@ -291,7 +321,7 @@ func _draw() -> void:
 		if font != null:
 			var t_lbl := _terrain_label(terrain)
 			var lbl_size := font.get_string_size(t_lbl, HORIZONTAL_ALIGNMENT_CENTER, -1, small_font_size)
-			draw_string(
+			_sstr(
 				font,
 				t_center + Vector2(-lbl_size.x * 0.5, hex_radius * 0.60),
 				t_lbl,
@@ -314,7 +344,7 @@ func _draw() -> void:
 			if font != null:
 				var num_str := str(num)
 				var n_size := font.get_string_size(num_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size)
-				draw_string(
+				_sstr(
 					font,
 					t_center + Vector2(-n_size.x * 0.5, n_size.y * 0.18),
 					num_str,
@@ -332,34 +362,9 @@ func _draw() -> void:
 				draw_circle(pip_pos, max(1.8, hex_radius * 0.032), num_col)
 
 		# 4. Blocker Icon
-		if state.blocker_tile == t_id:
+		if state.blocker_tile == t_id and _blocker_t >= 1.0:
 			var b_offset: Vector2 = Vector2(hex_radius * 0.28, -hex_radius * 0.24) if num > 0 else Vector2.ZERO
-			var b_center := t_center + b_offset
-			var br := hex_radius * 0.26
-			var shield := PackedVector2Array([
-				b_center + Vector2(0, -br),
-				b_center + Vector2(br * 0.85, -br * 0.45),
-				b_center + Vector2(br * 0.65, br * 0.45),
-				b_center + Vector2(0, br),
-				b_center + Vector2(-br * 0.65, br * 0.45),
-				b_center + Vector2(-br * 0.85, -br * 0.45),
-			])
-			draw_colored_polygon(shield, Palette.BLOCKER)
-			var shield_outline := shield.duplicate()
-			shield_outline.append(shield[0])
-			draw_polyline(shield_outline, Palette.INK, 2.2, true)
-			if font != null:
-				var b_txt := "B"
-				var bt_size := font.get_string_size(b_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, small_font_size)
-				draw_string(
-					font,
-					b_center + Vector2(-bt_size.x * 0.5, bt_size.y * 0.28),
-					b_txt,
-					HORIZONTAL_ALIGNMENT_CENTER,
-					-1,
-					small_font_size,
-					Palette.PAPER
-				)
+			_draw_blocker_icon(t_center + b_offset, hex_radius, small_font_size)
 
 		# 5. Highlighted Tile Ring (for PICK_BLOCKER_TILE)
 		if highlighted_tiles.has(t_id):
@@ -371,7 +376,7 @@ func _draw() -> void:
 	# 6. Built Roads
 	for e_id in range(topo.edge_vertices.size()):
 		var owner_id: int = state.edge_owner[e_id] if e_id < state.edge_owner.size() else -1
-		if owner_id != -1:
+		if owner_id != -1 and not _edge_pop_active(e_id):
 			var ev: Vector2i = topo.edge_vertices[e_id]
 			var p1 := _unit_to_screen(topo.vertex_positions[ev.x], hex_radius)
 			var p2 := _unit_to_screen(topo.vertex_positions[ev.y], hex_radius)
@@ -407,6 +412,8 @@ func _draw() -> void:
 		var b_type: int = state.vertex_building[v_id] if v_id < state.vertex_building.size() else GameTypes.BuildingType.NONE
 		if owner_id == -1 or b_type == GameTypes.BuildingType.NONE:
 			continue
+		if _vertex_pop_active(v_id):
+			continue
 		var vp := _unit_to_screen(topo.vertex_positions[v_id], hex_radius)
 		var p_col: Color = GameTypes.PLAYER_COLORS[owner_id % GameTypes.PLAYER_COLORS.size()]
 		if b_type == GameTypes.BuildingType.SETTLEMENT:
@@ -426,6 +433,10 @@ func _draw() -> void:
 			draw_circle(vp, rad, Color(Palette.INK_SOFT, 0.45))
 			draw_arc(vp, rad, 0.0, TAU, 24, h_col, 3.0 if is_hov else 2.2, true)
 
+	# 9.5 Build pop-in animations and the sliding Blocker
+	_draw_build_anims(topo, hex_radius)
+	_draw_blocker_slide(topo, hex_radius, small_font_size)
+
 	# 11. BUILD_ANY calm hints, hover ghost, pending build
 	if interaction_mode == InteractionMode.BUILD_ANY:
 		_draw_build_any(topo, hex_radius)
@@ -436,6 +447,9 @@ func _draw() -> void:
 
 	# 13. Floating resource popups
 	for popup in _popups:
+		if popup.has("fly"):
+			_draw_resource_fly(popup, font, hex_radius)
+			continue
 		var p_age: float = popup["age"]
 		var p_dur: float = popup["duration"]
 		var p_t: float = clampf(p_age / p_dur, 0.0, 1.0)
@@ -461,7 +475,7 @@ func _draw() -> void:
 		var p_dot_x := p_rect.position.x + 8.0 + p_dot_d * 0.5
 		draw_circle(Vector2(p_dot_x, p_pos.y), p_dot_d * 0.5, p_col)
 		draw_arc(Vector2(p_dot_x, p_pos.y), p_dot_d * 0.5, 0.0, TAU, 16, Color(Palette.INK_SOFT, p_alpha), 1.0, true)
-		draw_string(
+		_sstr(
 			font,
 			p_pos + Vector2(-p_ts.x * 0.5 + (p_dot_d + 8.0) * 0.5, p_ts.y * 0.32),
 			p_text,
@@ -496,7 +510,7 @@ func _draw() -> void:
 		t_box.set_border_width_all(2)
 		t_box.set_corner_radius_all(int(t_pill.y * 0.5))
 		draw_style_box(t_box, t_rect)
-		draw_string(
+		_sstr(
 			font,
 			t_center + Vector2(-t_ts.x * 0.5, t_ts.y * 0.32),
 			t_text,
@@ -636,6 +650,7 @@ func _draw_peak(pos: Vector2, h: float, hw: float, dark: Color, lite: Color) -> 
 
 func _draw_ports_structure(topo: HexMath.BoardTopology, hex_radius: float) -> void:
 	_harbour_label_rects.clear()
+	_port_badge_rects.clear()
 	_harbour_boat_rects.clear()
 	_port_specs.clear()
 	if state.vertex_ports.size() < topo.vertex_positions.size():
@@ -670,6 +685,8 @@ func _draw_ports_structure(topo: HexMath.BoardTopology, hex_radius: float) -> vo
 			"boat_pos": boat_pos,
 			"tangent": tangent,
 			"port_type": p_a,
+			"mid": mid,
+			"outward": outward,
 		})
 		port_index += 1
 
@@ -729,7 +746,9 @@ func _draw_boat(pos: Vector2, r: float, port_type: int) -> void:
 
 func _draw_port_labels(topo: HexMath.BoardTopology, hex_radius: float, font: Font) -> void:
 	_harbour_label_rects.clear()
-	if _port_specs.is_empty():
+	_port_badge_rects.clear()
+	_port_badge_data.clear()
+	if _port_specs.is_empty() or size.x < 10.0 or size.y < 10.0:
 		return
 	var land_polys: Array[PackedVector2Array] = []
 	for t_id in range(topo.tile_coords.size()):
@@ -737,7 +756,9 @@ func _draw_port_labels(topo: HexMath.BoardTopology, hex_radius: float, font: Fon
 		for v_id in topo.tile_vertices[t_id]:
 			poly.append(_unit_to_screen(topo.vertex_positions[v_id], hex_radius))
 		land_polys.append(poly)
+	_land_polys_screen = land_polys
 	var placed: Array[Rect2] = []
+	var placed_badges: Array[Rect2] = []
 	var bound := Rect2(Vector2(2.0, 2.0), size - Vector2(4.0, 4.0))
 	var gap := 4.0
 	for spec in _port_specs:
@@ -781,7 +802,61 @@ func _draw_port_labels(topo: HexMath.BoardTopology, hex_radius: float, font: Fon
 			chosen = _clamp_rect(Rect2(first - pill * 0.5, pill), bound)
 		placed.append(chosen)
 		_harbour_label_rects.append(chosen)
-		_draw_port_label_pill(chosen, font, fs, port_type)
+		var pi: int = _port_specs.find(spec)
+		var badge_d := maxf(24.0, hex_radius * 0.62)
+		var r_c: float = badge_d * 0.5
+		var tag_fs := maxi(11, int(badge_d * 0.30))
+		var tag_txt := "3:1" if port_type == GameTypes.PortType.GENERIC_3_TO_1 else "2:1"
+		var tag_ts := font.get_string_size(tag_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, tag_fs)
+		var tag_w: float = tag_ts.x + 8.0
+		var tag_h: float = float(tag_fs) + 5.0
+		var mid: Vector2 = spec["mid"]
+		var u: Vector2 = spec["outward"]
+		var boat_sup: float = _rect_support_along(boat_rect, u) - mid.dot(u)
+		var tag_gap: float = r_c + 3.0 + tag_h * 0.5
+		var chosen_c := Vector2.INF
+		var chosen_tag := Rect2()
+		var t := boat_sup + 6.0 + r_c
+		while t < 480.0:
+			var c := mid + u * t
+			var badge_rect := Rect2(c - Vector2(r_c, r_c), Vector2(badge_d, badge_d))
+			var tc := c + u * tag_gap
+			var tag_rect := Rect2(tc - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
+			if not bound.encloses(badge_rect) or not bound.encloses(tag_rect):
+				break
+			if _badge_zone_clear(c, r_c, tag_rect, land_polys, _harbour_boat_rects, placed_badges):
+				chosen_c = c
+				chosen_tag = tag_rect
+				break
+			t += 3.0
+		if chosen_c == Vector2.INF:
+			var last_c := mid + u * (boat_sup + 6.0 + r_c)
+			var last_tag := Rect2(last_c + u * tag_gap - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
+			var tt := boat_sup + 6.0 + r_c
+			while tt < 480.0:
+				var c2 := mid + u * tt
+				var badge_rect2 := Rect2(c2 - Vector2(r_c, r_c), Vector2(badge_d, badge_d))
+				var tc2 := c2 + u * tag_gap
+				var tag_rect2 := Rect2(tc2 - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
+				if not bound.encloses(badge_rect2) or not bound.encloses(tag_rect2):
+					break
+				last_c = c2
+				last_tag = tag_rect2
+				tt += 3.0
+			chosen_c = last_c
+			chosen_tag = last_tag
+		placed_badges.append(Rect2(chosen_c - Vector2(r_c, r_c), Vector2(badge_d, badge_d)))
+		placed_badges.append(chosen_tag)
+		_port_badge_rects.append(Rect2(chosen_c - Vector2(r_c, r_c), Vector2(badge_d, badge_d)))
+		_port_badge_data.append({
+			"center": chosen_c,
+			"r": r_c,
+			"tag_rect": chosen_tag,
+			"boat_rect": boat_rect,
+		})
+		if _hovered_port == pi or show_port_names:
+			_draw_port_label_pill(chosen, font, fs, port_type)
+		_draw_port_badge(chosen_c, badge_d, port_type, chosen_tag, tag_txt, tag_fs)
 
 func _label_hits(rect: Rect2, land_polys: Array[PackedVector2Array], placed: Array[Rect2]) -> bool:
 	var rect_poly := PackedVector2Array([
@@ -852,7 +927,7 @@ func _draw_port_label_pill(rect: Rect2, font: Font, font_size: int, port_type: i
 	var text_left := rect.position.x + (rect.size.x - text_ts.x) * 0.5 + (dot_r * 2.0 + 4.0) * 0.5
 	if port_type == GameTypes.PortType.GENERIC_3_TO_1:
 		text_left = rect.position.x + (rect.size.x - text_ts.x) * 0.5
-	draw_string(
+	_sstr(
 		font,
 		Vector2(text_left, text_cy + text_ts.y * 0.32),
 		lbl,
@@ -1011,12 +1086,20 @@ func _gui_input(event: InputEvent) -> void:
 		_hovered_edge = _find_closest_edge(topo, hex_radius, pos)
 		_hovered_tile = _find_closest_tile(topo, hex_radius, pos)
 		_hovered_city_vertex = _find_closest_city_vertex(topo, hex_radius, pos)
+		var new_port := -1
+		for i in range(_port_badge_rects.size()):
+			if _port_badge_rects[i].grow(3.0).has_point(pos):
+				new_port = i
+				break
+		if new_port != _hovered_port:
+			_hovered_port = new_port
 		_update_cursor_shape()
 		queue_redraw()
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var pos: Vector2 = event.position
 		if interaction_mode == InteractionMode.BUILD_ANY:
-			_handle_build_click(topo, hex_radius, pos)
+			if not _handle_build_click(topo, hex_radius, pos):
+				background_clicked.emit()
 			return
 		if not highlighted_vertices.is_empty():
 			var v_id := _find_closest_vertex(topo, hex_radius, pos)
@@ -1036,6 +1119,7 @@ func _gui_input(event: InputEvent) -> void:
 				tile_clicked.emit(t_id)
 				accept_event()
 				return
+		background_clicked.emit()
 
 func _update_cursor_shape() -> void:
 	var over_spot := (
@@ -1047,7 +1131,7 @@ func _update_cursor_shape() -> void:
 	else:
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
 
-func _handle_build_click(topo: HexMath.BoardTopology, hex_radius: float, pos: Vector2) -> void:
+func _handle_build_click(topo: HexMath.BoardTopology, hex_radius: float, pos: Vector2) -> bool:
 	var best_v := -1
 	var best_kind := ""
 	var best_v_d := _pick_radius_vertex(hex_radius)
@@ -1072,7 +1156,7 @@ func _handle_build_click(topo: HexMath.BoardTopology, hex_radius: float, pos: Ve
 	if best_v != -1:
 		build_spot_clicked.emit(best_kind, best_v)
 		accept_event()
-		return
+		return true
 	var best_e := -1
 	var best_e_d := _pick_radius_edge(hex_radius)
 	for e_id in highlighted_edges:
@@ -1089,6 +1173,8 @@ func _handle_build_click(topo: HexMath.BoardTopology, hex_radius: float, pos: Ve
 	if best_e != -1:
 		build_spot_clicked.emit("road", best_e)
 		accept_event()
+		return true
+	return false
 
 func _find_closest_vertex(topo: HexMath.BoardTopology, hex_radius: float, pos: Vector2) -> int:
 	var best_v := -1
@@ -1144,3 +1230,253 @@ func _find_closest_tile(topo: HexMath.BoardTopology, hex_radius: float, pos: Vec
 			best_dist = d
 			best_t = t_id
 	return best_t
+
+func _rect_support_along(rect: Rect2, dir: Vector2) -> float:
+	var best := -INF
+	for p in [
+		rect.position,
+		Vector2(rect.end.x, rect.position.y),
+		rect.end,
+		Vector2(rect.position.x, rect.end.y),
+	]:
+		best = maxf(best, p.dot(dir))
+	return best
+
+
+func _badge_zone_clear(center: Vector2, r: float, tag_rect: Rect2, polys: Array[PackedVector2Array], boats: Array[Rect2], placed: Array[Rect2]) -> bool:
+	for pr in placed:
+		if tag_rect.grow(2.0).intersects(pr):
+			return false
+		if _rect_circle_overlap(pr, center, r + 2.0):
+			return false
+	for br in boats:
+		if _rect_circle_overlap(br, center, r + 2.0):
+			return false
+		if tag_rect.grow(2.0).intersects(br):
+			return false
+	for poly in polys:
+		if point_poly_dist(center, poly) < r + 1.5:
+			return false
+		for corner in [
+			tag_rect.position,
+			Vector2(tag_rect.end.x, tag_rect.position.y),
+			tag_rect.end,
+			Vector2(tag_rect.position.x, tag_rect.end.y),
+		]:
+			if point_poly_dist(corner, poly) < 1.5:
+				return false
+	return true
+
+
+func _rect_circle_overlap(rect: Rect2, c: Vector2, r: float) -> bool:
+	var p := Vector2(clampf(c.x, rect.position.x, rect.end.x), clampf(c.y, rect.position.y, rect.end.y))
+	return c.distance_to(p) < r
+
+
+func point_poly_dist(p: Vector2, poly: PackedVector2Array) -> float:
+	var inside := false
+	var n := poly.size()
+	for i in range(n):
+		var a := poly[i]
+		var b := poly[(i + 1) % n]
+		if (a.y > p.y) != (b.y > p.y) and p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x:
+			inside = not inside
+	if inside:
+		return 0.0
+	var best := INF
+	for i in range(n):
+		var d := _point_seg_dist(p, poly[i], poly[(i + 1) % n])
+		if d < best:
+			best = d
+	return best
+
+
+func _point_seg_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var len2 := ab.length_squared()
+	if len2 <= 0.0001:
+		return p.distance_to(a)
+	var t := clampf((p - a).dot(ab) / len2, 0.0, 1.0)
+	return p.distance_to(a + ab * t)
+
+
+func get_land_polys() -> Array[PackedVector2Array]:
+	return _land_polys_screen
+
+
+func get_port_badge_data() -> Array[Dictionary]:
+	return _port_badge_data
+
+
+func _draw_port_badge(center: Vector2, d: float, port_type: int, tag_rect: Rect2, tag_txt: String, tag_fs: int) -> void:
+	var r := d * 0.5
+	draw_circle(center, r, Palette.PAPER)
+	draw_arc(center, r, 0.0, TAU, 28, Palette.INK_SOFT, 1.8, true)
+	var is_generic: bool = port_type == GameTypes.PortType.GENERIC_3_TO_1
+	var er := Rect2(center - Vector2(r, r) * 0.70, Vector2(r, r) * 1.40)
+	if is_generic:
+		CardFace.draw_emblem(self, "mixed", 0, er)
+	else:
+		CardFace.draw_emblem(self, "resource", port_type, er)
+	var font := ThemeDB.fallback_font
+	var box := StyleBoxFlat.new()
+	box.bg_color = Palette.PAPER
+	box.border_color = Palette.INK_SOFT
+	box.set_border_width_all(1)
+	box.set_corner_radius_all(3)
+	draw_style_box(box, tag_rect)
+	var ts := font.get_string_size(tag_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, tag_fs)
+	draw_string(font, Vector2(snappedf(tag_rect.position.x + 4.0, 1.0), snappedf(tag_rect.position.y + 3.0 + ts.y * 0.8, 1.0)), tag_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, tag_fs, Palette.INK)
+
+func get_port_count() -> int:
+	return _port_specs.size()
+
+func port_name_visible_for(idx: int) -> bool:
+	return show_port_names or _hovered_port == idx
+
+func _sstr(font: Font, pos: Vector2, text: String, alignment: int = HORIZONTAL_ALIGNMENT_LEFT, width: float = -1.0, font_size: int = 16, modulate: Color = Color(1, 1, 1, 1)) -> void:
+	draw_string(font, Vector2(snappedf(pos.x, 1.0), snappedf(pos.y, 1.0)), text, alignment, width, font_size, modulate)
+
+func _draw_blocker_icon(center: Vector2, hex_radius: float, small_font_size: int) -> void:
+	var br := hex_radius * 0.26
+	var shield := PackedVector2Array([
+		center + Vector2(0, -br),
+		center + Vector2(br * 0.85, -br * 0.45),
+		center + Vector2(br * 0.65, br * 0.45),
+		center + Vector2(0, br),
+		center + Vector2(-br * 0.65, br * 0.45),
+		center + Vector2(-br * 0.85, -br * 0.45),
+	])
+	draw_colored_polygon(shield, Palette.BLOCKER)
+	var shield_outline := shield.duplicate()
+	shield_outline.append(shield[0])
+	draw_polyline(shield_outline, Palette.INK, 2.2, true)
+	var font := ThemeDB.fallback_font
+	if font == null:
+		return
+	var b_txt := "B"
+	var bt_size := font.get_string_size(b_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, small_font_size)
+	_sstr(font, center + Vector2(-bt_size.x * 0.5, bt_size.y * 0.28), b_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, small_font_size, Palette.PAPER)
+
+func animate_build_vertex(v_id: int, col: Color) -> void:
+	if state == null or v_id < 0 or v_id >= HexMath.get_topology().vertex_positions.size():
+		return
+	for a in _build_anims:
+		if int(a.get("vertex", -1)) == v_id and float(a["age"]) < 0.2:
+			return
+	if reduce_motion:
+		_build_anims.append({"kind": "ring", "vertex": v_id, "age": 0.0, "duration": 1.5, "color": col, "static": true})
+	else:
+		_build_anims.append({"kind": "pop_vertex", "vertex": v_id, "age": 0.0, "duration": 0.6 * anim_scale, "color": col, "static": false, "building": int(state.vertex_building[v_id]), "seat": int(state.vertex_owner[v_id])})
+	anim_count += 1
+
+func animate_build_edge(e_id: int, col: Color) -> void:
+	if state == null or e_id < 0 or e_id >= HexMath.get_topology().edge_vertices.size():
+		return
+	for a in _build_anims:
+		if int(a.get("edge", -1)) == e_id and float(a["age"]) < 0.2:
+			return
+	if reduce_motion:
+		_build_anims.append({"kind": "ring_edge", "edge": e_id, "age": 0.0, "duration": 1.5, "color": col, "static": true})
+	else:
+		_build_anims.append({"kind": "pop_edge", "edge": e_id, "age": 0.0, "duration": 0.6 * anim_scale, "color": col, "static": false})
+	anim_count += 1
+
+func animate_blocker(from_tile: int) -> void:
+	if state == null or reduce_motion or from_tile < 0:
+		return
+	if from_tile == state.blocker_tile:
+		return
+	_blocker_from_tile = from_tile
+	_blocker_t = 0.0
+	anim_count += 1
+
+func anim_total() -> int:
+	return anim_count
+
+func _vertex_pop_active(v_id: int) -> bool:
+	for a in _build_anims:
+		if a["kind"] == "pop_vertex" and int(a["vertex"]) == v_id:
+			return true
+	return false
+
+func _edge_pop_active(e_id: int) -> bool:
+	for a in _build_anims:
+		if a["kind"] == "pop_edge" and int(a["edge"]) == e_id:
+			return true
+	return false
+
+func _draw_build_anims(topo: HexMath.BoardTopology, hex_radius: float) -> void:
+	for a in _build_anims:
+		var t := clampf(float(a["age"]) / float(a["duration"]), 0.0, 1.0)
+		var col: Color = a["color"]
+		if a["kind"] == "pop_edge" or a["kind"] == "ring_edge":
+			var e_id := int(a["edge"])
+			if e_id < 0 or e_id >= topo.edge_vertices.size():
+				continue
+			var ev: Vector2i = topo.edge_vertices[e_id]
+			var p1 := _unit_to_screen(topo.vertex_positions[ev.x], hex_radius)
+			var p2 := _unit_to_screen(topo.vertex_positions[ev.y], hex_radius)
+			if bool(a.get("static", false)):
+				draw_line(p1, p2, Color(col, 1.0 - t), max(8.0, hex_radius * 0.20), true)
+				continue
+			var pop := 1.0 + 0.45 * sin(PI * t)
+			draw_line(p1, p2, col, max(5.0, hex_radius * 0.14) * pop, true)
+			draw_arc((p1 + p2) * 0.5, hex_radius * (0.18 + 0.95 * t), 0.0, TAU, 24, Color(col, 1.0 - t), lerpf(5.0, 1.0, t), true)
+			continue
+		var v_id := int(a["vertex"])
+		if v_id < 0 or v_id >= topo.vertex_positions.size():
+			continue
+		var vp := _unit_to_screen(topo.vertex_positions[v_id], hex_radius)
+		if bool(a.get("static", false)):
+			draw_arc(vp, hex_radius * 0.30, 0.0, TAU, 28, Color(col, 1.0 - t), 3.0, true)
+			continue
+		var k := 0.45 + 0.55 * ease(t, 2.0)
+		var seat := maxi(0, int(a.get("seat", 0)))
+		if int(a.get("building", GameTypes.BuildingType.SETTLEMENT)) == GameTypes.BuildingType.CITY:
+			_draw_city(vp, hex_radius * 0.22 * k, col, seat)
+		else:
+			_draw_settlement(vp, hex_radius * 0.22 * k, col, seat)
+		draw_arc(vp, hex_radius * (0.16 + 1.05 * t), 0.0, TAU, 28, Color(col, 1.0 - t), lerpf(6.0, 1.0, t), true)
+
+func _draw_blocker_slide(topo: HexMath.BoardTopology, hex_radius: float, small_font_size: int) -> void:
+	if _blocker_t >= 1.0 or _blocker_from_tile < 0:
+		return
+	if _blocker_from_tile >= topo.tile_centers.size() or state.blocker_tile >= topo.tile_centers.size():
+		_blocker_t = 1.0
+		return
+	var from_c := _unit_to_screen(topo.tile_centers[_blocker_from_tile], hex_radius)
+	var to_c := _unit_to_screen(topo.tile_centers[state.blocker_tile], hex_radius)
+	var t := ease(_blocker_t, 1.6)
+	var pos := from_c.lerp(to_c, t)
+	_draw_blocker_icon(pos + Vector2(0, -hex_radius * 0.06 * sin(PI * _blocker_t)), hex_radius, small_font_size)
+
+func spawn_tile_resource_card_fly(tile_id: int, res: int) -> void:
+	if state == null or tile_id < 0 or tile_id >= HexMath.get_topology().tile_centers.size():
+		return
+	var topo := HexMath.get_topology()
+	var hex_radius := _get_hex_radius()
+	var from := _unit_to_screen(topo.tile_centers[tile_id], hex_radius)
+	_popups.append({
+		"fly": true,
+		"from": from,
+		"to": Vector2(lerpf(from.x, size.x * 0.5, 0.5), size.y + 40.0),
+		"res": res,
+		"age": 0.0,
+		"duration": maxf(0.25, 0.85 * anim_scale),
+	})
+
+func _draw_resource_fly(popup: Dictionary, font: Font, hex_radius: float) -> void:
+	var t := clampf(float(popup["age"]) / float(popup["duration"]), 0.0, 1.0)
+	var eased := t * t * (3.0 - 2.0 * t)
+	var pos: Vector2 = (popup["from"] as Vector2).lerp(popup["to"] as Vector2, eased)
+	var w := maxf(18.0, hex_radius * 0.34)
+	var card_r := Rect2(pos - Vector2(w, w * 1.4) * 0.5, Vector2(w, w * 1.4))
+	var alpha := 1.0 if t < 0.75 else clampf(1.0 - (t - 0.75) / 0.25, 0.0, 1.0)
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color(0.97, 0.94, 0.86, alpha)
+	box.border_color = Color(Palette.INK, alpha)
+	box.set_border_width_all(1)
+	box.set_corner_radius_all(3)
+	draw_style_box(box, card_r)
+	CardFace.draw_emblem(self, "resource", int(popup["res"]), card_r.grow(-w * 0.16))
