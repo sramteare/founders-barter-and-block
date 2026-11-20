@@ -50,6 +50,22 @@ var _port_badge_data: Array[Dictionary] = []
 var _land_polys_screen: Array[PackedVector2Array] = []
 var _hovered_port: int = -1
 var show_port_names: bool = false
+const HEX_STYLES: Array[String] = ["rich", "classic"]
+const TOKEN_STYLES: Array[String] = ["classic", "bold", "odds"]
+var hex_style := "rich":
+	set(v):
+		var clean := v if HEX_STYLES.has(v) else "rich"
+		if hex_style == clean:
+			return
+		hex_style = clean
+		queue_redraw()
+var token_style := "classic":
+	set(v):
+		var clean := v if TOKEN_STYLES.has(v) else "classic"
+		if token_style == clean:
+			return
+		token_style = clean
+		queue_redraw()
 var _harbour_boat_rects: Array[Rect2] = []
 var _port_specs: Array[Dictionary] = []
 
@@ -307,59 +323,69 @@ func _draw() -> void:
 			border_pts.append(vp)
 		border_pts.append(corners[0])
 
-		var paper_pts := PackedVector2Array()
-		for c in corners:
-			paper_pts.append(t_center + (c - t_center) * 1.035)
-		draw_colored_polygon(paper_pts, Palette.PAPER)
-		draw_colored_polygon(corners, base_col)
-		_draw_hex_wash(t_center, hex_radius, terrain)
-		draw_polyline(border_pts, Palette.INK_SOFT, 2.0, true)
+		if hex_style == "rich":
+			_draw_tile_rich(t_id, terrain, t_center, hex_radius)
+		else:
+			var paper_pts := PackedVector2Array()
+			for c in corners:
+				paper_pts.append(t_center + (c - t_center) * 1.035)
+			draw_colored_polygon(paper_pts, Palette.PAPER)
+			draw_colored_polygon(corners, base_col)
+			_draw_hex_wash(t_center, hex_radius, terrain)
+			draw_polyline(border_pts, Palette.INK_SOFT, 2.0, true)
 
-		_draw_tile_motif(t_id, terrain, t_center, hex_radius)
+			_draw_tile_motif(t_id, terrain, t_center, hex_radius)
 
-		# Terrain label near bottom of tile
-		if font != null:
-			var t_lbl := _terrain_label(terrain)
-			var lbl_size := font.get_string_size(t_lbl, HORIZONTAL_ALIGNMENT_CENTER, -1, small_font_size)
-			_sstr(
-				font,
-				t_center + Vector2(-lbl_size.x * 0.5, hex_radius * 0.60),
-				t_lbl,
-				HORIZONTAL_ALIGNMENT_CENTER,
-				-1,
-				small_font_size,
-				Palette.INK
-			)
+			# Terrain label near bottom of tile
+			if font != null:
+				var t_lbl := _terrain_label(terrain)
+				var lbl_size := font.get_string_size(t_lbl, HORIZONTAL_ALIGNMENT_CENTER, -1, small_font_size)
+				_sstr(
+					font,
+					t_center + Vector2(-lbl_size.x * 0.5, hex_radius * 0.60),
+					t_lbl,
+					HORIZONTAL_ALIGNMENT_CENTER,
+					-1,
+					small_font_size,
+					Palette.INK
+				)
 
 		# 3. Circular Number Tokens & Pip Dots
 		var num: int = state.tile_numbers[t_id] if t_id < state.tile_numbers.size() else 0
 		if num > 0:
-			var token_r := hex_radius * 0.30
-			draw_circle(t_center + Vector2(0, hex_radius * 0.035), token_r, Palette.PAPER_SHADOW)
-			draw_circle(t_center, token_r, Palette.NUMBER_TOKEN_BG)
-			draw_arc(t_center, token_r, 0.0, TAU, 32, Palette.INK, 1.6, true)
+			var tok_c := t_center
+			var tl := token_layout(num, hex_radius, token_style)
+			var token_r: float = float(tl["disc_r"])
+			var token_font: int = int(tl["num_font"])
+			var num_offset: Vector2 = tl["num_offset"]
+			draw_circle(tok_c + Vector2(0, hex_radius * 0.035), token_r, Palette.PAPER_SHADOW)
+			draw_circle(tok_c, token_r, Palette.NUMBER_TOKEN_BG)
+			draw_arc(tok_c, token_r, 0.0, TAU, 32, Palette.INK, 1.6, true)
 
 			var is_hot := (num == 6 or num == 8)
 			var num_col: Color = Palette.NUMBER_TOKEN_HOT if is_hot else Palette.NUMBER_TOKEN_TEXT
+			if token_style == "bold" and is_hot:
+				draw_arc(tok_c, token_r - 2.0, 0.0, TAU, 40, Palette.NUMBER_TOKEN_HOT, 3.0, true)
 			if font != null:
 				var num_str := str(num)
-				var n_size := font.get_string_size(num_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size)
+				var n_size := font.get_string_size(num_str, HORIZONTAL_ALIGNMENT_CENTER, -1, token_font)
+				var num_pos := tok_c + Vector2(-n_size.x * 0.5, 0.0) + num_offset
 				_sstr(
 					font,
-					t_center + Vector2(-n_size.x * 0.5, n_size.y * 0.18),
+					num_pos,
 					num_str,
 					HORIZONTAL_ALIGNMENT_CENTER,
 					-1,
-					font_size,
+					token_font,
 					num_col
 				)
+				if token_style == "bold":
+					_sstr(font, num_pos + Vector2(0.7, 0.0), num_str, HORIZONTAL_ALIGNMENT_CENTER, -1, token_font, num_col)
 
-			var pips := GameTypes.pip_count(num)
-			var pip_spacing := hex_radius * 0.095
-			var pip_start_x := -float(pips - 1) * pip_spacing * 0.5
-			for p_idx in range(pips):
-				var pip_pos := t_center + Vector2(pip_start_x + float(p_idx) * pip_spacing, token_r * 0.55)
-				draw_circle(pip_pos, max(1.8, hex_radius * 0.032), num_col)
+			var pip_r: float = float(tl["pip_r"])
+			var pip_col: Color = Palette.NUMBER_TOKEN_HOT if (is_hot and token_style == "bold") else num_col
+			for pip_rel in (tl["pips"] as Array):
+				draw_circle(tok_c + (pip_rel as Vector2), pip_r, pip_col)
 
 		# 4. Blocker Icon
 		if state.blocker_tile == t_id and _blocker_t >= 1.0:
@@ -566,9 +592,12 @@ func _draw_hex_wash(center: Vector2, r: float, terrain: int) -> void:
 		center + Vector2(-w, 0.5 * r),
 	]), shade_col)
 
-func _draw_tile_motif(tile_id: int, terrain: int, center: Vector2, r: float) -> void:
+func _draw_tile_motif(tile_id: int, terrain: int, center: Vector2, r: float, ink_only: bool = false) -> void:
 	var dark: Color = Color(Palette.terrain_shade(terrain), 0.95)
 	var lite: Color = Color(Palette.terrain_light(terrain), 0.95)
+	if ink_only:
+		dark = Color(Palette.INK, 0.8)
+		lite = Color(Palette.INK, 0.45)
 	match terrain:
 		GameTypes.TerrainType.FOREST:
 			var xs := [-0.50, -0.17, 0.19, 0.50]
@@ -644,6 +673,351 @@ func _draw_peak(pos: Vector2, h: float, hw: float, dark: Color, lite: Color) -> 
 		pos + Vector2(hw * 0.12, -h * 0.60),
 		pos - Vector2(hw * 0.10, -h * 0.66),
 	]), lite)
+
+
+func token_layout(num: int, hex_radius: float, style: String) -> Dictionary:
+	var pips := GameTypes.pip_count(num)
+	var disc_r := hex_radius * 0.30
+	var num_font := int(clampf(hex_radius * 0.30, 11.0, 20.0))
+	if style == "bold":
+		disc_r *= 1.2
+		num_font = int(float(num_font) * 1.2)
+	elif style == "odds":
+		var sc := 1.0
+		match pips:
+			5:
+				sc = 1.25
+			4:
+				sc = 1.12
+			3:
+				sc = 1.0
+			2:
+				sc = 0.9
+			1:
+				sc = 0.8
+		disc_r *= sc
+		num_font = int(float(num_font) * sc)
+	var pip_r := maxf(1.8, hex_radius * 0.032)
+	var num_str := str(num)
+	var font: Font = ThemeDB.fallback_font
+	var text_h := float(num_font)
+	if font != null:
+		text_h = font.get_string_size(num_str, HORIZONTAL_ALIGNMENT_CENTER, -1, num_font).y
+	var num_offset := Vector2(0.0, text_h * 0.18)
+	var s := hex_radius * 0.095
+	var row_y := disc_r * 0.55
+	if pips > 1:
+		var half := float(pips - 1) * s * 0.5
+		var reach := sqrt(half * half + row_y * row_y)
+		var limit := disc_r * 0.88 - pip_r - 0.05
+		if reach > limit:
+			var k := maxf(0.35, limit / reach)
+			s *= k
+			row_y *= k
+	if pips > 0:
+		var num_bottom := num_offset.y + text_h * 0.25
+		var pip_top := row_y - pip_r
+		if pip_top < num_bottom + 1.5:
+			num_offset.y -= (num_bottom + 1.5) - pip_top
+	var out_pips: Array[Vector2] = []
+	for i in range(pips):
+		out_pips.append(Vector2(-float(pips - 1) * s * 0.5 + float(i) * s, row_y))
+	return {"disc_r": disc_r, "num_font": num_font, "num_offset": num_offset, "pip_r": pip_r, "pips": out_pips}
+
+func _hex_poly(center: Vector2, r: float) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for i in range(6):
+		var ang := deg_to_rad(60.0 * float(i) - 30.0)
+		pts.append(center + Vector2(cos(ang), sin(ang)) * r)
+	return pts
+
+func _clip_line_to_poly(a: Vector2, b: Vector2, poly: PackedVector2Array, inside_ref: Vector2) -> PackedVector2Array:
+	var p0 := a
+	var p1 := b
+	var n := poly.size()
+	for i in range(n):
+		var c0: Vector2 = poly[i]
+		var c1: Vector2 = poly[(i + 1) % n]
+		var e := c1 - c0
+		var nrm := Vector2(e.y, -e.x)
+		var ref := nrm.dot(inside_ref - c0)
+		var inside_sign := 1.0 if ref > 0.0 else -1.0
+		var s0 := nrm.dot(p0 - c0) * inside_sign
+		var s1 := nrm.dot(p1 - c0) * inside_sign
+		if s0 >= 0.0 and s1 >= 0.0:
+			continue
+		if s0 < 0.0 and s1 < 0.0:
+			return PackedVector2Array()
+		var hit := p0.lerp(p1, s0 / (s0 - s1))
+		if s0 < 0.0:
+			p0 = hit
+		else:
+			p1 = hit
+	if p0.distance_squared_to(p1) < 0.01:
+		return PackedVector2Array()
+	return PackedVector2Array([p0, p1])
+
+func _tile_rand(tile_id: int, salt: int) -> float:
+	var h := int(tile_id) * 73856093 + int(salt) * 19349663
+	h = absi(h ^ (h >> 13))
+	h = absi(h * 1274126177)
+	h = absi(h ^ (h >> 16))
+	return float(h % 1000) / 1000.0
+
+func _terrain_resource(terrain: int) -> int:
+	match terrain:
+		GameTypes.TerrainType.FOREST:
+			return GameTypes.ResourceType.TIMBER
+		GameTypes.TerrainType.HILLS:
+			return GameTypes.ResourceType.CLAY
+		GameTypes.TerrainType.PASTURE:
+			return GameTypes.ResourceType.FLEECE
+		GameTypes.TerrainType.FIELDS:
+			return GameTypes.ResourceType.GRAIN
+		GameTypes.TerrainType.MOUNTAINS:
+			return GameTypes.ResourceType.IRON
+		_:
+			return -1
+
+func _ellipse_poly(c: Vector2, rx: float, ry: float, segs: int = 16) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for i in range(maxi(14, segs)):
+		var a := TAU * float(i) / float(maxi(14, segs))
+		pts.append(c + Vector2(cos(a) * rx, sin(a) * ry))
+	return pts
+
+func _clip_shape(shape: PackedVector2Array, poly: PackedVector2Array) -> Array:
+	if shape.size() < 3 or poly.size() < 3:
+		return []
+	var parts: Array = Geometry2D.intersect_polygons(shape, poly)
+	var out: Array = []
+	for part in parts:
+		var pp: PackedVector2Array = part
+		if pp.size() >= 3:
+			out.append(pp)
+	return out
+
+func _draw_poly_clipped(pts: PackedVector2Array, col: Color, hexp: PackedVector2Array) -> void:
+	for p in _clip_shape(pts, hexp):
+		draw_colored_polygon(p, col)
+
+func _draw_quad(a: Vector2, b: Vector2, w: float, col: Color, hexp: PackedVector2Array) -> void:
+	var d := b - a
+	if d.length_squared() < 0.0001:
+		return
+	var n := Vector2(-d.y, d.x).normalized() * w * 0.5
+	_draw_poly_clipped(PackedVector2Array([a - n, b - n, b + n, a + n]), col, hexp)
+
+func _stroke_line(a: Vector2, b: Vector2, w: float, col: Color, hexp: PackedVector2Array) -> void:
+	var seg := _clip_line_to_poly(a, b, hexp, hexp[0] + hexp[3])
+	if seg.size() == 2:
+		draw_line(seg[0], seg[1], col, w, true)
+
+func _shadow_ellipse(c: Vector2, rx: float, ry: float, hexp: PackedVector2Array) -> void:
+	_draw_poly_clipped(_ellipse_poly(c, rx, ry), Color(0.0, 0.0, 0.0, 0.18), hexp)
+
+func _conifer(pos: Vector2, sz: float, green: Color, hexp: PackedVector2Array) -> void:
+	_shadow_ellipse(pos + Vector2(sz * 0.35, sz * 0.98), sz * 0.55, sz * 0.16, hexp)
+	_draw_poly_clipped(PackedVector2Array([
+		pos + Vector2(-sz * 0.09, sz * 0.95), pos + Vector2(sz * 0.09, sz * 0.95),
+		pos + Vector2(sz * 0.09, sz * 0.55), pos + Vector2(-sz * 0.09, sz * 0.55),
+	]), Color(0.32, 0.21, 0.11), hexp)
+	_draw_poly_clipped(PackedVector2Array([
+		pos + Vector2(-sz * 0.85, sz * 0.62), pos + Vector2(0, -sz * 0.15), pos + Vector2(sz * 0.85, sz * 0.62),
+	]), green, hexp)
+	_draw_poly_clipped(PackedVector2Array([
+		pos + Vector2(-sz * 0.68, sz * 0.10), pos + Vector2(0, -sz * 0.85), pos + Vector2(sz * 0.68, sz * 0.10),
+	]), green.lightened(0.10), hexp)
+	_draw_poly_clipped(PackedVector2Array([
+		pos + Vector2(-sz * 0.85, sz * 0.62), pos + Vector2(0, -sz * 0.15), pos + Vector2(0, sz * 0.62),
+	]), green.lightened(0.16), hexp)
+	_draw_poly_clipped(PackedVector2Array([
+		pos + Vector2(sz * 0.0, -sz * 0.15), pos + Vector2(sz * 0.85, sz * 0.62), pos + Vector2(0, sz * 0.62),
+	]), green.darkened(0.22), hexp)
+
+func _sheep(pos: Vector2, sz: float, hexp: PackedVector2Array) -> void:
+	_shadow_ellipse(pos + Vector2(sz * 0.12, sz * 0.55), sz * 0.62, sz * 0.16, hexp)
+	_draw_poly_clipped(PackedVector2Array([
+		pos + Vector2(-sz * 0.25, sz * 0.25), pos + Vector2(-sz * 0.12, sz * 0.25),
+		pos + Vector2(-sz * 0.12, sz * 0.5), pos + Vector2(-sz * 0.25, sz * 0.5),
+	]), Color(0.25, 0.2, 0.16), hexp)
+	_draw_poly_clipped(PackedVector2Array([
+		pos + Vector2(sz * 0.12, sz * 0.25), pos + Vector2(sz * 0.25, sz * 0.25),
+		pos + Vector2(sz * 0.25, sz * 0.5), pos + Vector2(sz * 0.12, sz * 0.5),
+	]), Color(0.25, 0.2, 0.16), hexp)
+	_draw_poly_clipped(_ellipse_poly(pos, sz * 0.6, sz * 0.4), Color(0.95, 0.93, 0.88), hexp)
+	_draw_poly_clipped(_ellipse_poly(pos + Vector2(0, -sz * 0.12), sz * 0.45, sz * 0.22), Color(1, 1, 1, 0.45), hexp)
+	_draw_poly_clipped(_ellipse_poly(pos + Vector2(sz * 0.55, -sz * 0.05), sz * 0.24, sz * 0.2), Color(0.3, 0.24, 0.2), hexp)
+
+func _draw_tile_rich(tile_id: int, terrain: int, center: Vector2, r: float) -> void:
+	var hexp := _hex_poly(center, r)
+	var base := Color(Palette.terrain(terrain))
+	var ac := center.y
+	# a. gradient ground: lit warm at top-left, dark cool at bottom-right
+	var warm := base.lightened(0.18)
+	warm.r = minf(1.0, warm.r + 0.035)
+	var cool := base.darkened(0.20)
+	cool.b = minf(1.0, cool.b + 0.02)
+	var cols := PackedColorArray()
+	for c in hexp:
+		var t := clampf(0.5 + ((center.x - c.x) + (center.y - c.y)) / (r * 2.1), 0.0, 1.0)
+		cols.append(warm.lerp(cool, 1.0 - t))
+	draw_polygon(hexp, cols)
+	# b. far band: rolling ridge in a pale, desaturated tint
+	var far_col := base.lerp(Color(0.82, 0.87, 0.92), 0.42)
+	far_col.a = 0.85
+	var ridge := PackedVector2Array()
+	for i in range(9):
+		var fx := center.x + (-1.15 + 2.3 * float(i) / 8.0) * r
+		var fy := ac - r * (0.24 + 0.10 * sin(float(i) * 1.9 + float(tile_id)) + 0.04 * _tile_rand(tile_id, i))
+		ridge.append(Vector2(fx, fy))
+	ridge.append(Vector2(center.x + 1.15 * r, ac + 0.06 * r))
+	ridge.append(Vector2(center.x - 1.15 * r, ac + 0.06 * r))
+	_draw_poly_clipped(ridge, far_col, hexp)
+	# c. middle band: terrain features, lit left / shaded right, each with a soft shadow
+	match terrain:
+		GameTypes.TerrainType.FOREST:
+			var green := base.darkened(0.05)
+			var n_back := 3 + int(_tile_rand(tile_id, 1) * 2.0)
+			for k in range(n_back):
+				var fx := center.x + (-0.62 + 1.24 * float(k) / maxf(1.0, float(n_back - 1))) * r
+				_conifer(Vector2(fx, ac - 0.10 * r), r * (0.16 + 0.03 * _tile_rand(tile_id, 10 + k)), green.darkened(0.12), hexp)
+			var n_front := 3 + int(_tile_rand(tile_id, 2) * 2.0)
+			for k in range(n_front):
+				var px := center.x + (-0.72 + 1.44 * float(k) / maxf(1.0, float(n_front - 1))) * r
+				_conifer(Vector2(px, ac + 0.26 * r), r * (0.24 + 0.06 * _tile_rand(tile_id, 20 + k)), green, hexp)
+		GameTypes.TerrainType.HILLS:
+			for tno in range(3):
+				var ty := ac + (-0.26 + 0.24 * float(tno)) * r
+				var band := PackedVector2Array()
+				for i in range(9):
+					var fx := center.x + (-1.1 + 2.2 * float(i) / 8.0) * r
+					band.append(Vector2(fx, ty - 0.06 * r * sin(float(i) * 2.3 + float(tno))))
+				for i in range(9):
+					var gx := center.x + (1.1 - 2.2 * float(i) / 8.0) * r
+					band.append(Vector2(gx, ty + 0.12 * r - 0.05 * r * sin(float(i) * 1.7 + tno)))
+				_draw_poly_clipped(band, base.darkened(0.04 * float(tno)).lerp(Color(0.55, 0.3, 0.18), 0.18 * float(tno)), hexp)
+			var kx := center.x - 0.42 * r
+			var ky := ac + 0.30 * r
+			_shadow_ellipse(Vector2(kx + 0.10 * r, ky + 0.16 * r), 0.30 * r, 0.08 * r, hexp)
+			for row in range(3):
+				for col in range(2 - (row % 2)):
+					var bx := kx + (float(col) * 0.24 - 0.10) * r + (0.06 * r if row % 2 == 1 else 0.0)
+					var by := ky - float(row) * 0.13 * r
+					var blk := Rect2(Vector2(bx, by), Vector2(0.2 * r, 0.11 * r))
+					_draw_poly_clipped(PackedVector2Array([
+						blk.position, Vector2(blk.end.x, blk.position.y), blk.end, Vector2(blk.position.x, blk.end.y),
+					]), Color(0.66, 0.34, 0.22), hexp)
+					_draw_poly_clipped(PackedVector2Array([
+						blk.position, Vector2(blk.end.x, blk.position.y),
+						Vector2(blk.end.x - 0.04 * r, blk.position.y + 0.03 * r), Vector2(blk.position.x + 0.04 * r, blk.position.y + 0.03 * r),
+					]), Color(0.9, 0.6, 0.45), hexp)
+		GameTypes.TerrainType.PASTURE:
+			_draw_poly_clipped(_ellipse_poly(Vector2(center.x - 0.42 * r, ac + 0.18 * r), 0.62 * r, 0.34 * r), base.lightened(0.05), hexp)
+			_draw_poly_clipped(_ellipse_poly(Vector2(center.x + 0.46 * r, ac + 0.10 * r), 0.55 * r, 0.3 * r), base.darkened(0.06), hexp)
+			_stroke_line(Vector2(center.x - 0.9 * r, ac + 0.14 * r), Vector2(center.x + 0.05 * r, ac - 0.12 * r), 1.6, Color(1, 1, 0.9, 0.45), hexp)
+			for k in range(4):
+				var wx := center.x + (-0.55 + 0.36 * float(k)) * r
+				_draw_quad(Vector2(wx, ac + 0.02 * r), Vector2(wx, ac - 0.16 * r), 0.03 * r, Color(0.4, 0.3, 0.18), hexp)
+			_draw_quad(Vector2(center.x - 0.55 * r, ac - 0.11 * r), Vector2(center.x + 0.53 * r, ac - 0.11 * r), 0.02 * r, Color(0.45, 0.34, 0.2), hexp)
+			for k in range(3):
+				var sx := center.x + (-0.55 + 0.5 * float(k) + 0.08 * _tile_rand(tile_id, 5 + k)) * r
+				_sheep(Vector2(sx, ac + 0.38 * r + 0.04 * r * _tile_rand(tile_id, 9 + k)), r * 0.13, hexp)
+		GameTypes.TerrainType.FIELDS:
+			var vy := ac - 0.30 * r
+			for k in range(6):
+				var x0 := center.x + (-0.9 + 0.3 * float(k)) * r
+				var x1 := center.x + (-0.9 + 0.3 * float(k + 1)) * r
+				var vx0 := center.x + (-0.28 + 0.112 * float(k)) * r
+				var vx1 := center.x + (-0.28 + 0.112 * float(k + 1)) * r
+				var col := base.lightened(0.10) if k % 2 == 0 else base.darkened(0.08)
+				_draw_poly_clipped(PackedVector2Array([
+					Vector2(x0, ac + 0.55 * r), Vector2(x1, ac + 0.55 * r),
+					Vector2(vx1, vy), Vector2(vx0, vy),
+				]), col, hexp)
+			_draw_quad(Vector2(center.x - 0.9 * r, vy), Vector2(center.x + 0.9 * r, vy), 0.045 * r, Color(0.2, 0.34, 0.16), hexp)
+			for k in range(2):
+				var hx := center.x + (-0.35 + 0.7 * float(k)) * r
+				var hy := ac + 0.16 * r
+				_shadow_ellipse(Vector2(hx + 0.08 * r, hy + 0.2 * r), 0.2 * r, 0.06 * r, hexp)
+				_draw_poly_clipped(_ellipse_poly(Vector2(hx, hy), 0.17 * r, 0.13 * r), base.lightened(0.22), hexp)
+				_draw_poly_clipped(_ellipse_poly(Vector2(hx - 0.05 * r, hy - 0.04 * r), 0.1 * r, 0.08 * r), Color(1, 0.95, 0.7, 0.5), hexp)
+		GameTypes.TerrainType.MOUNTAINS:
+			var rock := base.lerp(Color(0.45, 0.48, 0.55), 0.55)
+			for k in range(3):
+				var pkx := center.x + (-0.5 + 0.5 * float(k) + 0.1 * _tile_rand(tile_id, 3 + k)) * r
+				var ph := (0.52 + 0.18 * _tile_rand(tile_id, 13 + k)) * r
+				var hw := (0.42 + 0.1 * _tile_rand(tile_id, 23 + k)) * r
+				var by0 := ac + 0.34 * r
+				var apex := Vector2(pkx, by0 - ph)
+				_draw_poly_clipped(PackedVector2Array([Vector2(pkx - hw, by0), apex, Vector2(pkx, by0)]), rock.lightened(0.14), hexp)
+				_draw_poly_clipped(PackedVector2Array([apex, Vector2(pkx + hw, by0), Vector2(pkx, by0)]), rock.darkened(0.18), hexp)
+				if ph > 0.6 * r:
+					_draw_poly_clipped(PackedVector2Array([
+						apex + Vector2(-hw * 0.22, ph * 0.22), apex + Vector2(hw * 0.05, ph * 0.1), apex + Vector2(hw * 0.24, ph * 0.24),
+					]), Color(0.94, 0.96, 0.98), hexp)
+				for s in range(2):
+					_stroke_line(apex + Vector2(hw * (0.12 + 0.2 * float(s)), ph * 0.45), apex + Vector2(hw * (0.3 + 0.2 * float(s)), ph * 0.8), 1.0, Color(0, 0, 0, 0.2), hexp)
+			var mx := center.x + (0.3 - 0.6 * _tile_rand(tile_id, 33)) * r
+			var my := ac + 0.36 * r
+			_draw_poly_clipped(_ellipse_poly(Vector2(mx, my), 0.11 * r, 0.09 * r), Color(0.2, 0.16, 0.14), hexp)
+			_draw_poly_clipped(_ellipse_poly(Vector2(mx, my - 0.02 * r), 0.075 * r, 0.06 * r), Color(0.06, 0.05, 0.05), hexp)
+		GameTypes.TerrainType.BARREN:
+			for k in range(3):
+				var dy := ac + (-0.12 + 0.22 * float(k)) * r
+				var crest := PackedVector2Array()
+				for i in range(9):
+					var fx := center.x + (-1.1 + 2.2 * float(i) / 8.0) * r
+					crest.append(Vector2(fx, dy - 0.1 * r * sin(float(i) * 1.4 + 2.2 * float(k))))
+				for i in range(9):
+					var gx := center.x + (1.1 - 2.2 * float(i) / 8.0) * r
+					crest.append(Vector2(gx, dy + 0.11 * r - 0.08 * r * sin(float(i) * 1.4 + 2.2 * float(k))))
+				_draw_poly_clipped(crest, base.lightened(0.12 - 0.07 * float(k)), hexp)
+				var slip := PackedVector2Array()
+				for i in range(9):
+					var hx := center.x + (1.1 - 2.2 * float(i) / 8.0) * r
+					slip.append(Vector2(hx, dy + 0.11 * r - 0.08 * r * sin(float(i) * 1.4 + 2.2 * float(k))))
+				for i in range(9):
+					var gx2 := center.x + (1.1 - 2.2 * float(i) / 8.0) * r
+					slip.append(Vector2(gx2, dy + 0.2 * r - 0.08 * r * sin(float(i) * 1.4 + 2.2 * float(k))))
+				_draw_poly_clipped(slip, base.darkened(0.14 + 0.03 * float(k)), hexp)
+			for k in range(3):
+				var rx2 := center.x + (-0.5 + 0.5 * float(k) + 0.1 * _tile_rand(tile_id, 41 + k)) * r
+				var ry2 := ac + 0.42 * r
+				_shadow_ellipse(Vector2(rx2 + 0.04 * r, ry2 + 0.05 * r), 0.07 * r, 0.022 * r, hexp)
+				_draw_poly_clipped(_ellipse_poly(Vector2(rx2, ry2), 0.05 * r, 0.036 * r), Color(0.5, 0.46, 0.4), hexp)
+	# d. foreground strip with short strokes for depth
+	var fg := PackedVector2Array()
+	for i in range(6):
+		var a: Vector2 = hexp[i]
+		if a.y > center.y + 0.18 * r:
+			fg.append(a)
+		else:
+			fg.append(Vector2(a.x, center.y + maxf(0.3 * r, (a.y - center.y))))
+	_draw_poly_clipped(fg, Color(0.06, 0.08, 0.05, 0.30), hexp)
+	for k in range(7):
+		var tx := center.x + (-0.8 + 0.27 * float(k) + 0.08 * _tile_rand(tile_id, 51 + k)) * r
+		var ty0 := center.y + (0.44 + 0.1 * _tile_rand(tile_id, 61 + k)) * r
+		_stroke_line(Vector2(tx, ty0), Vector2(tx + (0.05 - 0.1 * _tile_rand(tile_id, 71 + k)) * r, ty0 - 0.08 * r), 1.4, Color(0.1, 0.12, 0.08, 0.55), hexp)
+	# e. finish: inner vignette, top-left highlight, dark outline
+	for i in range(6):
+		var a: Vector2 = hexp[i]
+		var b: Vector2 = hexp[(i + 1) % 6]
+		var ai := center + (a - center) * 0.88
+		var bi := center + (b - center) * 0.88
+		draw_polygon(
+			PackedVector2Array([a, b, bi, ai]),
+			PackedColorArray([Color(0, 0, 0, 0.22), Color(0, 0, 0, 0.22), Color(0, 0, 0, 0.0), Color(0, 0, 0, 0.0)])
+		)
+	for i in range(6):
+		var ha: Vector2 = hexp[i]
+		var hb: Vector2 = hexp[(i + 1) % 6]
+		var hm := (ha + hb) * 0.5
+		if hm.x < center.x and hm.y <= center.y:
+			draw_line(ha, hb, Color(1.0, 0.98, 0.9, 0.5), 1.5, true)
+	var ring := hexp.duplicate()
+	ring.append(hexp[0])
+	draw_polyline(ring, Color(Palette.INK, 0.8), 2.0, true)
 
 func _draw_ports_structure(topo: HexMath.BoardTopology, hex_radius: float) -> void:
 	_harbour_label_rects.clear()

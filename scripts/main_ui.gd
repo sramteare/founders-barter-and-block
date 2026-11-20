@@ -34,6 +34,10 @@ var _prev_flight_bank: Dictionary = {}
 var _last_flights: Array = []
 var _flight_seen_steal_serial: int = -1
 var _flight_layer: Control = null
+var _dice_show_active: bool = false
+var _dice_show_phase: String = ""
+var _dice_show_count: int = 0
+var _dice_show_node: Control = null
 var _steal_hold_deadline_ms: int = 0
 var _steal_delay_cb: Callable = Callable()
 var _prev_blocker_tile: int = -1
@@ -149,6 +153,11 @@ var _trade_partner_row: HBoxContainer = null
 var _trade_respond_mode: bool = false
 var _trade_counter_mode: bool = false
 var _trade_reopen_token: String = ""
+var _declined_counters: Dictionary = {}
+var _counter_cards_shown: bool = false
+var _counter_offer_token: String = ""
+var _counter_toasted: Dictionary = {}
+var _trade_no_takers_lbl: Label = null
 var _trade_last_ot_open: bool = false
 var _trade_view_pid: int = -1
 var _trade_ready_dismissed: bool = false
@@ -192,6 +201,10 @@ var _settings_motion_check: CheckBox = null
 var _settings_auto_check: CheckBox = null
 var _settings_portnames_check: CheckBox = null
 var _show_port_names: bool = false
+var _hex_style: String = "rich"
+var _token_style: String = "classic"
+var _settings_hex_opt: OptionButton = null
+var _settings_token_opt: OptionButton = null
 var _settings_step_btn: Button = null
 var _settings_ai_difficulty: int = 2
 var _settings_muted: bool = false
@@ -1359,6 +1372,36 @@ func _build_settings_overlay() -> void:
 	)
 	_add_settings_row(vbox, "Ports:", "Show the text name of each port", _settings_portnames_check)
 
+	_settings_hex_opt = OptionButton.new()
+	var hex_labels: Array[String] = ["Rich landscape", "Classic"]
+	for i in range(BoardView.HEX_STYLES.size()):
+		_settings_hex_opt.add_item(hex_labels[i], i)
+	_settings_hex_opt.custom_minimum_size = Vector2(150, 36)
+	_settings_hex_opt.tooltip_text = "Concept look for the resource hex tiles"
+	_style_option(_settings_hex_opt)
+	_settings_hex_opt.item_selected.connect(func(idx: int) -> void:
+		_hex_style = BoardView.HEX_STYLES[idx]
+		if _board_view != null:
+			_board_view.hex_style = _hex_style
+		_save_settings()
+	)
+	_add_settings_row(vbox, "Hex style:", "Try a concept look for the hexes", _settings_hex_opt)
+
+	_settings_token_opt = OptionButton.new()
+	var token_labels: Array[String] = ["Classic", "Bold", "Scale with odds"]
+	for i in range(BoardView.TOKEN_STYLES.size()):
+		_settings_token_opt.add_item(token_labels[i], i)
+	_settings_token_opt.custom_minimum_size = Vector2(150, 36)
+	_settings_token_opt.tooltip_text = "Concept look for the number tokens"
+	_style_option(_settings_token_opt)
+	_settings_token_opt.item_selected.connect(func(idx: int) -> void:
+		_token_style = BoardView.TOKEN_STYLES[idx]
+		if _board_view != null:
+			_board_view.token_style = _token_style
+		_save_settings()
+	)
+	_add_settings_row(vbox, "Number tokens:", "Try a concept look for the chips", _settings_token_opt)
+
 	_settings_auto_check = CheckBox.new()
 	_settings_auto_check.text = "Bots play automatically"
 	_settings_auto_check.tooltip_text = "Turn off to advance the bots one step at a time"
@@ -1600,6 +1643,12 @@ func _load_settings() -> void:
 	_reduce_motion = bool(cfg.get_value("settings", "reduce_motion", false))
 	auto_ai = bool(cfg.get_value("settings", "auto_ai", true))
 	_show_port_names = bool(cfg.get_value("settings", "port_names", false))
+	_hex_style = str(cfg.get_value("settings", "hex_style", "rich"))
+	_token_style = str(cfg.get_value("settings", "token_style", "classic"))
+	if not BoardView.HEX_STYLES.has(_hex_style):
+		_hex_style = "rich"
+	if not BoardView.TOKEN_STYLES.has(_token_style):
+		_token_style = "classic"
 
 func _save_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -1610,6 +1659,8 @@ func _save_settings() -> void:
 	cfg.set_value("settings", "reduce_motion", _reduce_motion)
 	cfg.set_value("settings", "auto_ai", auto_ai)
 	cfg.set_value("settings", "port_names", _show_port_names)
+	cfg.set_value("settings", "hex_style", _hex_style)
+	cfg.set_value("settings", "token_style", _token_style)
 	cfg.save(settings_path)
 
 func _apply_settings() -> void:
@@ -1622,6 +1673,8 @@ func _apply_settings() -> void:
 	if _board_view != null:
 		_board_view.reduce_motion = _reduce_motion
 		_board_view.show_port_names = _show_port_names
+		_board_view.hex_style = _hex_style
+		_board_view.token_style = _token_style
 		_board_view.anim_scale = 0.45 if _settings_speed_idx >= 2 else 1.0
 	_settings_diff_opt.select(_settings_diff_opt.get_item_index(_settings_ai_difficulty))
 	_settings_text_opt.select(_settings_text_idx)
@@ -1629,6 +1682,12 @@ func _apply_settings() -> void:
 	_settings_mute_check.button_pressed = _settings_muted
 	_settings_motion_check.button_pressed = _reduce_motion
 	_settings_portnames_check.button_pressed = _show_port_names
+	var hidx := BoardView.HEX_STYLES.find(_hex_style)
+	if hidx >= 0:
+		_settings_hex_opt.select(hidx)
+	var tidx := BoardView.TOKEN_STYLES.find(_token_style)
+	if tidx >= 0:
+		_settings_token_opt.select(tidx)
 	_settings_auto_check.button_pressed = auto_ai
 	_settings_step_btn.visible = not auto_ai
 	_step_top_btn.visible = not auto_ai
@@ -1790,7 +1849,7 @@ func _on_state_updated(state: GameState, events: Array[String]) -> void:
 
 	if rolled_now and state.last_dice.x > 0 and state.last_dice.y > 0:
 		_roll_fx_count += 1
-		_dice_widget.animate_roll(state.last_dice.x, state.last_dice.y)
+		_start_dice_roll_fx(state)
 		if state.last_dice.x + state.last_dice.y != 7:
 			_spawn_production_popups(state)
 	_last_seen_dice = state.last_dice
@@ -2061,6 +2120,7 @@ func _build_flight_layer() -> void:
 
 
 func _reset_flight_state() -> void:
+	_finish_dice_show()
 	_prev_flight_hands = []
 	_prev_flight_bank = {}
 	_flight_seen_steal_serial = -1
@@ -2488,6 +2548,21 @@ func _refresh_ui() -> void:
 	var state := session.state
 	var acting_id := session.get_acting_player_id()
 	var human_acting := _is_human_acting()
+
+	var ot_now: Dictionary = state.open_trade
+	var ot_token := "" if ot_now.is_empty() else "%s|%d" % [_ot_token(ot_now), int(state.turn_number)]
+	if ot_token != _counter_offer_token:
+		_counter_offer_token = ot_token
+		_declined_counters = {}
+	var live_counters := {}
+	if not ot_now.is_empty():
+		var ot_resp: Dictionary = ot_now.get("responses", {})
+		for rp_id in ot_resp:
+			if str(((ot_resp[rp_id] as Dictionary)).get("status", "")) == "counter":
+				live_counters[int(rp_id)] = true
+	for ck in _counter_toasted.keys().duplicate():
+		if not live_counters.has(ck):
+			_counter_toasted.erase(ck)
 
 	# Discard picker first, so every later section sees a fresh discard state
 	var needs_discard := (
@@ -3437,6 +3512,14 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_partner_row.visible = false
 	_trade_content.add_child(_trade_partner_row)
 
+	_trade_no_takers_lbl = Label.new()
+	_trade_no_takers_lbl.text = "No takers — withdraw or change your offer"
+	_trade_no_takers_lbl.add_theme_font_size_override("font_size", 12)
+	_trade_no_takers_lbl.add_theme_color_override("font_color", Palette.ACCENT_RED.darkened(0.1))
+	_trade_no_takers_lbl.visible = false
+	_trade_no_takers_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_trade_content.add_child(_trade_no_takers_lbl)
+
 	for r in GameTypes.ALL_RESOURCES:
 		_trade_give_counts[r] = 0
 		_trade_get_counts[r] = 0
@@ -3487,6 +3570,11 @@ func _build_trade_stepper(parent: HBoxContainer, res: int, is_give: bool) -> voi
 	]
 	name_lbl.add_theme_font_size_override("font_size", 13)
 	name_lbl.add_theme_color_override("font_color", Palette.TEXT)
+	name_lbl.clip_text = false
+	var sfont := ThemeDB.fallback_font
+	if sfont != null:
+		var abbr_w := ceilf(sfont.get_string_size(name_lbl.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x) + 1.0
+		name_lbl.custom_minimum_size = Vector2(abbr_w, 0)
 	grp.add_child(name_lbl)
 
 	var minus := Button.new()
@@ -3499,7 +3587,10 @@ func _build_trade_stepper(parent: HBoxContainer, res: int, is_give: bool) -> voi
 
 	var cnt := Label.new()
 	cnt.text = "0"
-	cnt.custom_minimum_size = Vector2(12, 0)
+	var cnt_w := 12.0
+	if sfont != null:
+		cnt_w = ceilf(sfont.get_string_size("10", HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x) + 8.0
+	cnt.custom_minimum_size = Vector2(cnt_w, 0)
 	cnt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cnt.add_theme_font_size_override("font_size", 13)
 	cnt.add_theme_color_override("font_color", Palette.INK)
@@ -3682,20 +3773,27 @@ func _update_tray_min_height() -> void:
 	if not _trade_tray.visible:
 		_trade_tray.custom_minimum_size.y = 0.0
 		return
+	var bar_min := 98.0
+	if _hand_bar_panel != null:
+		bar_min = maxf(60.0, _hand_bar_panel.get_combined_minimum_size().y)
+		_hand_bar_panel.custom_minimum_size.y = bar_min
+	var chrome := bar_min
+	if _hand_bar_panel != null and _hand_bar_panel.get_parent() != null and _hand_bar_panel.get_parent().get_child_count() > 0:
+		var top: Node = _hand_bar_panel.get_parent().get_child(0)
+		if top is Control:
+			chrome += maxf(24.0, (top as Control).get_combined_minimum_size().y)
+	var strip_h := 0.0
+	if _offer_strip != null and _offer_strip.visible:
+		strip_h = _offer_strip.get_combined_minimum_size().y
+	chrome += strip_h
+	var board_min := 420.0 if _counter_cards_shown else 480.0
 	var nat := _trade_content.get_combined_minimum_size().y + 12.0
 	var avail := 99999.0
 	var win_h: float = get_viewport().get_visible_rect().size.y
 	if win_h > 0.0:
-		var chrome := 98.0
-		if _hand_bar_panel != null and _hand_bar_panel.size.y > 0.0:
-			chrome = _hand_bar_panel.size.y
-		if _hand_bar_panel != null and _hand_bar_panel.get_parent() != null and _hand_bar_panel.get_parent().get_child_count() > 0:
-			var top: Node = _hand_bar_panel.get_parent().get_child(0)
-			if top is Control and (top as Control).size.y > 0.0:
-				chrome += (top as Control).size.y
-		avail = win_h - 480.0 - chrome - 6.0
+		avail = win_h - board_min - chrome - 6.0
 	elif _center_split != null and _center_split.size.y > 0.0:
-		avail = _center_split.size.y - 480.0
+		avail = _center_split.size.y - board_min
 	_trade_tray.custom_minimum_size.y = minf(nat, maxf(avail, 96.0))
 
 func _build_offer_strip(root_vbox: VBoxContainer) -> void:
@@ -3758,11 +3856,14 @@ func _refresh_offer_strip(state: GameState) -> void:
 			"decline":
 				_offer_strip_chips.add_child(_make_pill("%s: ✗ declines" % pname, Palette.PAPER_DARK, Palette.ACCENT_RED.darkened(0.1)))
 			"counter":
-				_offer_strip_chips.add_child(_make_pill("%s: ↺ gives %s for your %s" % [
-					pname,
-					_format_resource_bundle(resp.get("offer", {})),
-					_format_resource_bundle(resp.get("request", {})),
-				], Palette.PAPER_DARK, Palette.HEADING))
+				if _declined_counters.has(p_id):
+					_offer_strip_chips.add_child(_make_pill(
+						"%s: ✗ counter declined" % pname, Palette.PAPER_DARK, Palette.ACCENT_RED.darkened(0.1)
+					))
+				else:
+					_offer_strip_chips.add_child(_make_pill(
+						"%s: ↺ counters" % pname, Palette.PAPER_DARK, Palette.HEADING
+					))
 
 func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -> void:
 	if _trade_tray == null:
@@ -3954,6 +4055,9 @@ func _rebuild_partner_cards(state: GameState, ot: Dictionary, ot_open: bool, hum
 		(bank_card.get_child(0) as VBoxContainer).add_child(_trade_bank_btn)
 		_trade_partner_row.add_child(bank_card)
 
+	var takers_checked := 0
+	var takers_declined := 0
+	var any_counter := false
 	var self_id := _trade_dash_pid()
 	for idx in range(state.players.size()):
 		if idx == self_id:
@@ -3963,11 +4067,13 @@ func _rebuild_partner_cards(state: GameState, ot: Dictionary, ot_open: bool, hum
 		var status := "—"
 		var status_color := Palette.TEXT_MUTED
 		var can_trade := false
+		var counter_resp: Dictionary = {}
 		if ot_open:
 			if p_id == int(ot.get("from", -1)):
 				status = "Offering…"
 				status_color = Palette.HEADING
 			else:
+				takers_checked += 1
 				var responses: Dictionary = ot.get("responses", {})
 				if not responses.has(p_id):
 					status = "Waiting…"
@@ -3982,15 +4088,30 @@ func _rebuild_partner_cards(state: GameState, ot: Dictionary, ot_open: bool, hum
 					elif st_str == "decline":
 						status = "✗ Declines"
 						status_color = Palette.ACCENT_RED.darkened(0.1)
+						takers_declined += 1
 					elif st_str == "counter":
-						status = "↺ Counter: gives %s for your %s" % [
-							_format_resource_bundle(resp.get("offer", {})),
-							_format_resource_bundle(resp.get("request", {})),
-						]
-						status_color = Palette.HEADING
-						can_trade = true
+						counter_resp = resp
+						any_counter = true
+						if bool(_declined_counters.get(p_id, false)):
+							takers_declined += 1
 		var pname := str(p_data.get("name", GameTypes.PLAYER_NAMES[p_id]))
 		var card := _make_partner_card(pname, GameTypes.PLAYER_COLORS[p_id])
+		if not counter_resp.is_empty():
+			if int(ot.get("from", -1)) == _view_pid() and not _counter_toasted.has(p_id):
+				_counter_toasted[p_id] = true
+				_show_toast("%s counters: wants %s for %s" % [
+					pname,
+					_format_resource_bundle(counter_resp.get("offer", {})),
+					_format_resource_bundle(counter_resp.get("request", {})),
+				], Palette.ACCENT_GOLD.darkened(0.2))
+			card.tooltip_text = "%s — counter-offer: gives %s for your %s" % [
+				pname,
+				_format_resource_bundle(counter_resp.get("request", {})),
+				_format_resource_bundle(counter_resp.get("offer", {})),
+			]
+			_add_counter_offer_content(card, pname, p_id, counter_resp, state, bool(_declined_counters.get(p_id, false)))
+			_trade_partner_row.add_child(card)
+			continue
 		card.tooltip_text = "%s — %s" % [pname, status]
 		var st_lbl := _add_card_status(card, status, status_color, 12)
 		st_lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -4002,6 +4123,159 @@ func _rebuild_partner_cards(state: GameState, ot: Dictionary, ot_open: bool, hum
 			t_btn.pressed.connect(func() -> void: _submit_human_action(GameAction.finalize_open_trade(partner)))
 		(card.get_child(0) as VBoxContainer).add_child(t_btn)
 		_trade_partner_row.add_child(card)
+	var no_takers := (
+		ot_open and int(ot.get("from", -1)) == _view_pid()
+		and takers_checked > 0 and takers_declined == takers_checked
+	)
+	if _trade_no_takers_lbl != null:
+		_trade_no_takers_lbl.visible = no_takers
+	var board_min := 420.0 if any_counter else 480.0
+	if _counter_cards_shown != any_counter:
+		_counter_cards_shown = any_counter
+		if _board_view != null:
+			_board_view.custom_minimum_size.y = board_min
+		if _trade_tray != null and _trade_tray.visible:
+			_update_tray_min_height()
+
+func _missing_for_bundle(state: GameState, bundle: Dictionary) -> Dictionary:
+	var missing := {}
+	var hand: Dictionary = state.players[_view_pid()].get("hand", {})
+	for r in GameTypes.ALL_RESOURCES:
+		var want := int(bundle.get(r, 0))
+		if want <= 0:
+			continue
+		var short := want - int(hand.get(r, 0))
+		if short > 0:
+			missing[r] = short
+	return missing
+
+func _add_counter_side(box: HBoxContainer, title: String, bundle: Dictionary, missing: Dictionary) -> void:
+	var shown := 0
+	for r in GameTypes.ALL_RESOURCES:
+		shown += mini(int(bundle.get(r, 0)), 4)
+	if shown <= 0:
+		return
+	var t := Label.new()
+	t.text = title
+	t.add_theme_font_size_override("font_size", 9)
+	t.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(t)
+	for r in GameTypes.ALL_RESOURCES:
+		var want := int(bundle.get(r, 0))
+		if want <= 0:
+			continue
+		for i in range(mini(want, 4)):
+			var f := CardFace.new()
+			f.custom_minimum_size = Vector2(22, 22)
+			f.focusable = false
+			f.focus_mode = Control.FOCUS_NONE
+			f.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			f.kind = "resource"
+			f.resource = r
+			f.count_badge = false
+			f.show_name = false
+			f.disabled = missing.has(r)
+			box.add_child(f)
+		if want > 4:
+			var more := Label.new()
+			more.text = "×%d" % want
+			more.add_theme_font_size_override("font_size", 9)
+			more.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+			more.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			box.add_child(more)
+
+func _add_counter_offer_content(
+	card: PanelContainer,
+	pname: String,
+	p_id: int,
+	resp: Dictionary,
+	state: GameState,
+	declined: bool
+) -> void:
+	var col := card.get_child(0) as VBoxContainer
+	var card_sb := card.get_theme_stylebox("panel") as StyleBoxFlat
+	if card_sb != null:
+		card_sb.border_color = Palette.ACCENT_GOLD
+		card_sb.set_border_width_all(2)
+	var row1 := col.get_child(0) as HBoxContainer
+	var pill := PanelContainer.new()
+	var ps := StyleBoxFlat.new()
+	ps.bg_color = Color(Palette.ACCENT_GOLD, 0.25)
+	ps.border_color = Palette.ACCENT_GOLD.darkened(0.15)
+	ps.set_border_width_all(1)
+	ps.set_corner_radius_all(5)
+	ps.content_margin_left = 4.0
+	ps.content_margin_right = 4.0
+	ps.content_margin_top = 0.0
+	ps.content_margin_bottom = 0.0
+	pill.add_theme_stylebox_override("panel", ps)
+	pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var pill_lbl := Label.new()
+	pill_lbl.text = "COUNTER-OFFER"
+	pill_lbl.add_theme_font_size_override("font_size", 8)
+	pill_lbl.add_theme_color_override("font_color", Palette.HEADING)
+	pill_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pill.add_child(pill_lbl)
+	row1.add_child(pill)
+	var missing := _missing_for_bundle(state, resp.get("offer", {}))
+	var terms := HBoxContainer.new()
+	terms.add_theme_constant_override("separation", 4)
+	terms.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_add_counter_side(terms, "You give", resp.get("offer", {}), missing)
+	var have_give := not _bundle_has_any(resp.get("offer", {}))
+	var have_get := not _bundle_has_any(resp.get("request", {}))
+	if have_give and have_get:
+		var arrow := Label.new()
+		arrow.text = "\u2192"
+		arrow.add_theme_font_size_override("font_size", 10)
+		arrow.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+		arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		terms.add_child(arrow)
+	_add_counter_side(terms, "You get", resp.get("request", {}), {})
+	col.add_child(terms)
+	if declined:
+		var dl := Label.new()
+		dl.text = "\u2717 Counter declined"
+		dl.add_theme_font_size_override("font_size", 10)
+		dl.add_theme_color_override("font_color", Palette.ACCENT_RED.darkened(0.1))
+		dl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		col.add_child(dl)
+		return
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 4)
+	var accept_btn := Button.new()
+	accept_btn.text = "Accept counter"
+	accept_btn.custom_minimum_size = Vector2(0, 26)
+	accept_btn.add_theme_font_size_override("font_size", 11)
+	accept_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(accept_btn, "primary")
+	if missing.is_empty():
+		accept_btn.tooltip_text = "Accept %s's counter-offer" % pname
+		accept_btn.pressed.connect(func() -> void: _submit_human_action(GameAction.finalize_open_trade(p_id)))
+	else:
+		accept_btn.disabled = true
+		accept_btn.tooltip_text = "You don't have %s" % _format_resource_bundle(missing)
+	var decline_btn := Button.new()
+	decline_btn.text = "Decline"
+	decline_btn.custom_minimum_size = Vector2(0, 26)
+	decline_btn.add_theme_font_size_override("font_size", 11)
+	_style_button(decline_btn, "ghost")
+	decline_btn.tooltip_text = "Dismiss %s's counter-offer" % pname
+	decline_btn.pressed.connect(func() -> void:
+		_declined_counters[p_id] = true
+		_refresh_ui()
+	)
+	btn_row.add_child(accept_btn)
+	btn_row.add_child(decline_btn)
+	col.add_child(btn_row)
+
+func _bundle_has_any(bundle: Dictionary) -> bool:
+	for r in GameTypes.ALL_RESOURCES:
+		if int(bundle.get(r, 0)) > 0:
+			return true
+	return false
 
 func _make_partner_card(title: String, swatch_color: Variant) -> PanelContainer:
 	var card := PanelContainer.new()
@@ -4517,20 +4791,127 @@ func _make_card_panel(bg_col: Color) -> PanelContainer:
 	return p
 
 
+func _start_dice_roll_fx(state: GameState) -> void:
+	var a := int(state.last_dice.x)
+	var b := int(state.last_dice.y)
+	if _reduce_motion or _flight_layer == null or _board_view == null or _dice_widget == null or not _dice_widget.is_inside_tree():
+		_dice_widget.set_motion_enabled(not _reduce_motion)
+		_dice_widget.animate_roll(a, b)
+		return
+	var bot_rolled := false
+	var cur := int(state.current_player)
+	if cur >= 0 and cur < session.seats.size() and session.seats[cur].is_ai():
+		bot_rolled = true
+	var hold_s := 0.6 if (bot_rolled and _settings_speed_idx >= 2) else 1.5
+	_start_dice_show(a, b, hold_s)
+
+func _start_dice_show(a: int, b: int, hold_s: float) -> void:
+	if _dice_show_active:
+		_finish_dice_show()
+	_dice_show_count += 1
+	_dice_show_active = true
+	_dice_show_phase = "travel"
+	_dice_widget.d1 = a
+	_dice_widget.d2 = b
+	_dice_widget.queue_redraw()
+	_dice_widget.modulate.a = 0.0
+	_dice_widget.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var w := DicePairWidget.new()
+	w.show_caption = false
+	w.set_motion_enabled(true)
+	w.set_roll_enabled(false)
+	w.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	w.focus_mode = Control.FOCUS_NONE
+	_flight_layer.add_child(w)
+	w.size = w.custom_minimum_size
+	w.d1 = a
+	w.d2 = b
+	w.queue_redraw()
+	_dice_show_node = w
+	var from_c := _to_ui_local(_dice_widget.get_global_rect().get_center())
+	var br := _board_view.get_global_rect()
+	var half := w.size * 0.5
+	var tx := br.position.x + br.size.x * 0.84
+	var ty := br.position.y + br.size.y * 0.84
+	if br.size.x > half.x * 2.0 + 8.0:
+		tx = clampf(tx, br.position.x + half.x + 4.0, br.end.x - half.x - 4.0)
+	else:
+		tx = br.position.x + br.size.x * 0.5
+	if br.size.y > half.y * 2.0 + 8.0:
+		ty = clampf(ty, br.position.y + half.y + 4.0, br.end.y - half.y - 4.0)
+	else:
+		ty = br.position.y + br.size.y * 0.5
+	var to_c := _to_ui_local(Vector2(tx, ty))
+	from_c -= half
+	to_c -= half
+	w.pivot_offset = w.size * 0.5
+	w.position = from_c
+	var tw := w.create_tween()
+	tw.tween_property(w, "position", to_c, 0.35).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(w, "rotation", TAU, 0.35)
+	tw.tween_callback(func() -> void:
+		if _dice_show_node != w:
+			return
+		_dice_show_phase = "tumble"
+		w.animate_roll(a, b)
+	)
+	tw.tween_interval(0.45)
+	tw.tween_callback(func() -> void:
+		if _dice_show_node != w:
+			return
+		_dice_show_phase = "hold"
+	)
+	tw.tween_property(w, "scale", Vector2(1.25, 1.25), 0.15).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(hold_s)
+	tw.tween_callback(func() -> void:
+		if _dice_show_node != w:
+			return
+		_dice_show_phase = "return"
+	)
+	tw.tween_property(w, "scale", Vector2.ONE, 0.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(w, "position", from_c, 0.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_callback(func() -> void:
+		if _dice_show_node != w:
+			return
+		_end_dice_show(w)
+	)
+
+func _end_dice_show(w: Control) -> void:
+	_dice_show_node = null
+	_dice_show_active = false
+	_dice_show_phase = ""
+	_restore_dice_bar()
+	if is_instance_valid(w):
+		w.queue_free()
+
+func _finish_dice_show() -> void:
+	if _dice_show_node != null and is_instance_valid(_dice_show_node):
+		_dice_show_node.free()
+	_dice_show_node = null
+	_dice_show_active = false
+	_dice_show_phase = ""
+	_restore_dice_bar()
+
+func _restore_dice_bar() -> void:
+	if _dice_widget != null and is_instance_valid(_dice_widget):
+		_dice_widget.modulate.a = 1.0
+		_dice_widget.mouse_filter = Control.MOUSE_FILTER_STOP
+
 # =====================================================================
 # Custom drawn 2d6 dice widget (the roll control)
 # =====================================================================
 class DicePairWidget extends Control:
-	const DICE_SIZE := 34.0
-	const DICE_GAP := 10.0
-	const PILL_W := 54.0
-	const PILL_H := 26.0
+	const DICE_SIZE := 44.0
+	const DICE_GAP := 13.0
+	const PILL_W := 70.0
+	const PILL_H := 34.0
 
 	signal pressed
 
 	var d1: int = 0
 	var d2: int = 0
 	var motion_enabled := true
+	var show_caption := true
 	var _rolling := false
 	var _roll_enabled := false
 	var _roll_timer: Timer = null
@@ -4542,7 +4923,7 @@ class DicePairWidget extends Control:
 
 	func _ready() -> void:
 		var full_w := DICE_SIZE * 2.0 + DICE_GAP + 8.0 + PILL_W + 10.0
-		custom_minimum_size = Vector2(full_w, 60.0)
+		custom_minimum_size = Vector2(full_w, 78.0)
 		focus_mode = Control.FOCUS_ALL
 		mouse_filter = Control.MOUSE_FILTER_STOP
 		tooltip_text = "Last Roll"
@@ -4661,21 +5042,22 @@ class DicePairWidget extends Control:
 			return
 		var sum := d1 + d2
 		var txt := str(sum) if sum > 0 else "-"
-		var ts := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_CENTER, -1, 15)
+		var ts := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_CENTER, -1, 19)
 		draw_string(
 			font,
 			pill_rect.position + Vector2(pill_rect.size.x * 0.5 - ts.x * 0.5, pill_rect.size.y * 0.5 + ts.y * 0.30),
 			txt,
 			HORIZONTAL_ALIGNMENT_CENTER,
 			-1,
-			15,
+			19,
 			Palette.INK
 		)
 
-		if _roll_enabled:
-			draw_string(font, Vector2(0.0, size.y - 4.0), "Click to roll", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Palette.HEADING)
-		elif sum > 0:
-			draw_string(font, Vector2(0.0, size.y - 4.0), "Last roll", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Palette.TEXT_MUTED)
+		if show_caption:
+			if _roll_enabled:
+				draw_string(font, Vector2(0.0, size.y - 4.0), "Click to roll", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Palette.HEADING)
+			elif sum > 0:
+				draw_string(font, Vector2(0.0, size.y - 4.0), "Last roll", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Palette.TEXT_MUTED)
 		_redraw_rings()
 
 	func _redraw_rings() -> void:

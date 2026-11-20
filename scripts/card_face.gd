@@ -64,6 +64,12 @@ var stack_depth := 0:
 		_mark_dirty()
 var focusable := true
 var count_badge := true
+var show_name := true:
+	set(v):
+		if show_name == v:
+			return
+		show_name = v
+		_mark_dirty()
 var pile_low_tint := false:
 	set(v):
 		if pile_low_tint == v:
@@ -104,6 +110,20 @@ func _ready() -> void:
 		queue_redraw()
 	)
 
+func badge_bounds() -> Array[Rect2]:
+	var out: Array[Rect2] = []
+	var cr := _card_rect()
+	if count > 0 and count_badge:
+		var rr2 := maxf(9.0, size.x * 0.18)
+		var c2 := Vector2(cr.end.x - rr2 - 2.0, cr.position.y + rr2 + 2.0)
+		var r2 := rr2 + 1.5
+		out.append(Rect2(c2 - Vector2(r2, r2), Vector2(r2 * 2.0, r2 * 2.0)))
+	if badge > 0:
+		var bc := badge_center_local()
+		var rr := _badge_rect().size.x * 0.5 + 1.5
+		out.append(Rect2(bc - Vector2(rr, rr), Vector2(rr * 2.0, rr * 2.0)))
+	return out
+
 func badge_center_local() -> Vector2:
 	var s := size.x
 	var r := s * 0.17
@@ -117,6 +137,8 @@ func _badge_rect() -> Rect2:
 func _card_rect() -> Rect2:
 	var lift := 6.0 if selected else (3.0 if _hover else 0.0)
 	var lt := 3.0 + float(stack_depth) * 1.8
+	if (count_badge and count > 0) or badge > 0:
+		lt += 5.0
 	var h := size.y - lt - 3.0
 	if pile_count >= 0:
 		h = minf(h, (size.x - 6.0) / RATIO)
@@ -175,13 +197,16 @@ func _draw() -> void:
 	draw_style_box(fs, inner)
 	var emblem_rect := Rect2(inner.position + inner.size * Vector2(0.16, 0.10), inner.size * Vector2(0.68, 0.55))
 	var font := ThemeDB.fallback_font
+	var want_name := show_name and size.x >= 34.0
 	if kind == "resource" and resource >= 0:
 		draw_emblem(self, "resource", resource, emblem_rect, a)
-		_draw_name(font, cr, GameTypes.resource_name(resource).to_upper(), Color(Palette.INK, a))
+		if want_name:
+			_draw_name(font, cr, GameTypes.resource_name(resource).to_upper(), Color(Palette.INK, a))
 	elif kind == "action":
 		draw_emblem(self, "action", action, emblem_rect, a)
-		_draw_name(font, cr, CardFace.action_name(action).to_upper(), Color(Palette.INK, a))
-	else:
+		if want_name:
+			_draw_name(font, cr, CardFace.action_name(action).to_upper(), Color(Palette.INK, a))
+	elif want_name:
 		_draw_name(font, cr, "CARD", Color(Palette.INK, a))
 	_draw_pile_edges(cr)
 	_draw_badges(cr)

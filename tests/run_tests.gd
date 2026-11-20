@@ -812,6 +812,34 @@ func _start_ui_tests() -> void:
 	_queue_ui_test([
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_counter_offer_card_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_dice_roll_show_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_badge_bounds_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_stepper_labels_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_token_layout_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_board_styles_ui_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_style_defaults_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
 	], _test_sfx_body)
 
 func _test_hotseat_trade_ui_body(ui: Node) -> void:
@@ -2076,6 +2104,7 @@ func _test_tray_bar_fit_body(ui: Node) -> void:
 	var seats: Array[SeatConfig] = [
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
 	]
 	root.size = Vector2i(1280, 800)
 	ui.session.start_match(779004, seats, true)
@@ -2083,14 +2112,392 @@ func _test_tray_bar_fit_body(ui: Node) -> void:
 	await ui.get_tree().process_frame
 	var st: GameState = ui.session.state
 	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	var bar_closed := float(ui._hand_bar_panel.get_global_rect().end.y)
+	_assert(bar_closed <= 800.5, "The hand bar fits a 1280x800 window with the tray closed, got bottom %.1f" % bar_closed)
+	var dmin: Vector2 = ui._dice_widget.custom_minimum_size
+	_assert(dmin.x >= 180.0, "The dice widget grew wider, got %s" % str(dmin))
+	_assert(dmin.y >= 70.0, "The dice widget grew taller, got %s" % str(dmin))
+	var bar_r: Rect2 = ui._hand_bar_panel.get_global_rect()
+	var dice_r: Rect2 = ui._dice_widget.get_global_rect()
+	_assert(bar_r.has_point(dice_r.position) and bar_r.has_point(dice_r.end), "The dice widget stays inside the bar: %s vs %s" % [str(dice_r), str(bar_r)])
+	var win_r := Rect2(Vector2.ZERO, Vector2(root.size))
+	_assert(win_r.grow(0.5).encloses(dice_r), "The dice widget is inside the window with the tray closed: %s" % str(dice_r))
+	for r in GameTypes.ALL_RESOURCES:
+		var fr: Rect2 = ui._res_card_refs[r].get_global_rect()
+		_assert(bar_r.grow(0.5).encloses(fr), "Hand face %d fits inside the bar (tray closed): %s vs %s" % [r, str(fr), str(bar_r)])
+		_assert(win_r.grow(0.5).encloses(fr), "Hand face %d fits inside the window (tray closed): %s" % [r, str(fr)])
 	ui._toggle_trade_tray()
 	await ui.get_tree().process_frame
 	await ui.get_tree().process_frame
 	_assert(bool(ui._trade_tray.visible), "The trade tray is open in propose mode")
 	var bar_end := float(ui._hand_bar_panel.get_global_rect().end.y)
 	_assert(bar_end <= 800.5, "The hand bar stays inside a 1280x800 window with the tray open, got bottom %.1f" % bar_end)
+	var bar_r2: Rect2 = ui._hand_bar_panel.get_global_rect()
+	_assert(win_r.grow(0.5).encloses(bar_r2), "The whole hand bar is inside the window with the tray open: %s" % str(bar_r2))
+	for r in GameTypes.ALL_RESOURCES:
+		var fr2: Rect2 = ui._res_card_refs[r].get_global_rect()
+		_assert(bar_r2.grow(0.5).encloses(fr2), "Hand face %d fits inside the bar (tray open): %s vs %s" % [r, str(fr2), str(bar_r2)])
+		_assert(win_r.grow(0.5).encloses(fr2), "Hand face %d fits inside the window (tray open): %s" % [r, str(fr2)])
+	var dice_r2: Rect2 = ui._dice_widget.get_global_rect()
+	_assert(bar_r2.grow(0.5).encloses(dice_r2) and win_r.grow(0.5).encloses(dice_r2), "The dice widget fits inside bar and window (tray open): %s" % str(dice_r2))
+	# counters: both buttons of every counter card must be fully visible without scrolling
+	var st2: GameState = ui.session.state
+	st2.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 2
+	st2.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 3
+	st2.players[2]["hand"][GameTypes.ResourceType.GRAIN] = 3
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.TIMBER: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	ui.session.submit_action(1, GameAction.respond_open_trade("counter", {GameTypes.ResourceType.IRON: 2}, {GameTypes.ResourceType.GRAIN: 1}))
+	ui.session.submit_action(2, GameAction.respond_open_trade("counter", {GameTypes.ResourceType.IRON: 2}, {GameTypes.ResourceType.GRAIN: 1}))
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	_assert(ui._counter_cards_shown, "Counter cards should mark the tray")
+	var tray_r: Rect2 = ui._trade_tray.get_global_rect()
+	var scroll_r: Rect2 = ui._trade_scroll.get_global_rect()
+	var accept_btn := _find_button_by_text(ui._trade_partner_row, "Accept counter")
+	_assert(accept_btn != null, "Counter cards carry an Accept counter button")
+	for b in [accept_btn, _find_button_by_text(ui._trade_partner_row, "Decline")]:
+		var br: Rect2 = b.get_global_rect()
+		_assert(tray_r.grow(0.5).encloses(br), "Button '%s' inside the tray rect: %s vs %s" % [b.text, str(br), str(tray_r)])
+		_assert(scroll_r.grow(0.5).encloses(br), "Button '%s' inside the tray scroll area: %s vs %s" % [b.text, str(br), str(scroll_r)])
+		var bar_r3: Rect2 = ui._hand_bar_panel.get_global_rect()
+		_assert(bar_r3.end.y <= 800.5, "The bar still fits with counter cards open, got %.1f" % bar_r3.end.y)
+		for r3 in GameTypes.ALL_RESOURCES:
+			var fr3: Rect2 = ui._res_card_refs[r3].get_global_rect()
+			_assert(win_r.grow(0.5).encloses(fr3) and bar_r3.grow(0.5).encloses(fr3), "Hand face %d fits with counter cards open: %s" % [r3, str(fr3)])
 	root.size = Vector2i(64, 64)
 	_pass_section("64. Tray Bar Fit Test (the bottom bar stays in the window with the tray open)")
+func _test_counter_offer_card_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(779065, seats, true)
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = 0
+	st.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 1
+	st.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 2
+	ui._refresh_ui()
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.TIMBER: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	ui.session.submit_action(1, GameAction.respond_open_trade("counter", {GameTypes.ResourceType.IRON: 2}, {GameTypes.ResourceType.GRAIN: 1}))
+	await ui.get_tree().process_frame
+	_assert(ui._trade_partner_row.get_child_count() == 1, "One partner card expected")
+	var dcard: Node = ui._trade_partner_row.get_child(0)
+	_assert(_find_label_containing(dcard, "COUNTER-OFFER"), "Counter card should carry the COUNTER-OFFER pill")
+	_assert(_find_label_containing(dcard, "You give"), "Counter card should show the 'You give' row")
+	_assert(_find_label_containing(dcard, "You get"), "Counter card should show the 'You get' row")
+	var accept_btn := _find_button_by_text(dcard, "Accept counter")
+	_assert(accept_btn != null, "Counter card should offer an Accept counter button")
+	_assert(_find_button_by_text(dcard, "Trade") == null, "Counter card must not show the plain Trade button")
+	_assert(bool(accept_btn.disabled), "Accept counter should be disabled while the offer cannot be paid")
+	_assert(str(accept_btn.tooltip_text).begins_with("You don't have"), "Disabled accept tooltip mismatch: '%s'" % str(accept_btn.tooltip_text))
+	_assert(_toast_texts(ui).contains("Dune counters: wants 2 Iron for 1 Grain"), "Counter should toast once, got '%s'" % _toast_texts(ui))
+	var tcount: int = _toast_texts(ui).count("Dune counters: wants 2 Iron for 1 Grain")
+	ui._refresh_ui()
+	ui._refresh_ui()
+	_assert(_toast_texts(ui).count("Dune counters: wants 2 Iron for 1 Grain") == tcount, "One toast per counter only")
+	var dline := _find_button_by_text(dcard, "Decline")
+	_assert(dline != null, "Counter card should offer a Decline button")
+	var g0: int = int(st.players[0]["hand"].get(GameTypes.ResourceType.GRAIN, 0))
+	st.players[0]["hand"][GameTypes.ResourceType.IRON] = 3
+	ui._refresh_ui()
+	await ui.get_tree().process_frame
+	accept_btn = _find_button_by_text(ui._trade_partner_row, "Accept counter")
+	_assert(accept_btn != null and not bool(accept_btn.disabled), "Accept counter should enable once the offer can be paid")
+	accept_btn.pressed.emit()
+	await ui.get_tree().process_frame
+	_assert(st.open_trade.is_empty(), "Accepting a counter should resolve the offer")
+	_assert(int(st.players[0]["hand"].get(GameTypes.ResourceType.IRON, 0)) == 1, "Accepted counter must pay the iron")
+	_assert(int(st.players[0]["hand"].get(GameTypes.ResourceType.GRAIN, 0)) == g0 + 1, "Accepted counter must deliver the grain")
+	# second offer: decline keeps the offer open and hides the buttons
+	ui.session.state.open_trades_this_turn = 0
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.TIMBER: 1}, {GameTypes.ResourceType.FLEECE: 1}))
+	ui.session.submit_action(1, GameAction.respond_open_trade("counter", {GameTypes.ResourceType.IRON: 2}, {GameTypes.ResourceType.GRAIN: 1}))
+	await ui.get_tree().process_frame
+	var dcard2: Node = ui._trade_partner_row.get_child(0)
+	var dline2 := _find_button_by_text(dcard2, "Decline")
+	_assert(dline2 != null, "Second counter card should offer Decline")
+	dline2.pressed.emit()
+	await ui.get_tree().process_frame
+	_assert(not st.open_trade.is_empty(), "Declining a counter is UI-only; the offer stays open")
+	_assert(_find_button_by_text(ui._trade_partner_row, "Accept counter") == null, "Declined counter should drop the accept button")
+	_assert(_find_label_containing(ui._trade_partner_row, "✗ Counter declined"), "Declined counter should show its status")
+	_assert(bool(ui._trade_no_takers_lbl.visible), "All counters declined should surface the no-takers line")
+	ui.session.submit_action(0, GameAction.cancel_open_trade())
+	_assert(not bool(ui._trade_no_takers_lbl.visible), "No-takers line clears when the offer closes")
+	ui.session.state.open_trades_this_turn = 0
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.IRON: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	_assert(not ui.session.state.open_trade.is_empty(), "The fresh offer must be open")
+	_assert(ui._declined_counters.is_empty(), "A new offer must clear declined counters")
+	_assert(_find_button_by_text(ui._trade_partner_row, "Accept counter") == null, "Fresh offer has no counter buttons")
+	var st2: GameState = ui.session.state
+	st2.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 3
+	ui.session.submit_action(1, GameAction.respond_open_trade("accept"))
+	await ui.get_tree().process_frame
+	_assert(_find_label_containing(ui._trade_partner_row, "✓ Accepts"), "Accepting bot still shows ✓ Accepts")
+	_assert(_find_button_by_text(ui._trade_partner_row, "Trade") != null, "Accepting bot still shows the Trade button")
+	_pass_section("65. Counter-Offer Card Test (pill, give/get rows, accept/decline, no-takers)")
+
+func _test_dice_roll_show_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(779066, seats, true)
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = 0
+	ui._refresh_ui()
+	await ui.get_tree().process_frame
+	st.last_dice = Vector2i(3, 4)
+	var evs: Array[String] = ["Azure rolled 3 and 4."]
+	ui._on_state_updated(st, evs)
+	_assert(bool(ui._dice_show_active), "A roll triggers the dice show")
+	_assert(int(ui._dice_show_count) == 1, "First show counted, got %d" % int(ui._dice_show_count))
+	_assert(str(ui._dice_show_phase) == "travel", "Show starts in travel, got '%s'" % str(ui._dice_show_phase))
+	_assert(ui._dice_show_node != null and ui._dice_show_node.get_parent() == ui._flight_layer, "Travelling dice live on the flight layer")
+	_assert(ui._flight_layer.get_child_count() == 1, "Exactly one moving dice node, got %d" % ui._flight_layer.get_child_count())
+	_assert(absf(ui._dice_widget.modulate.a) < 0.05, "Bar dice go ghost during the show")
+	await ui.get_tree().create_timer(0.5).timeout
+	_assert(str(ui._dice_show_phase) == "tumble", "After travel the dice tumble, got '%s'" % str(ui._dice_show_phase))
+	ui._finish_dice_show()
+	_assert(not bool(ui._dice_show_active), "finish_dice_show deactivates the show")
+	_assert(str(ui._dice_show_phase) == "", "finish_dice_show clears the phase")
+	_assert(ui._flight_layer.get_child_count() == 0, "finish_dice_show leaves no dice node on the flight layer")
+	_assert(ui._dice_widget.modulate.a > 0.9, "Bar dice become visible again")
+	st.last_dice = Vector2i(5, 6)
+	ui._start_dice_roll_fx(st)
+	st.last_dice = Vector2i(6, 6)
+	ui._start_dice_roll_fx(st)
+	_assert(int(ui._dice_show_count) == 3, "A new roll restarts the show (3 starts total), got %d" % int(ui._dice_show_count))
+	_assert(ui._flight_layer.get_child_count() == 1, "Never more than one moving dice node, got %d" % ui._flight_layer.get_child_count())
+	ui._reset_flight_state()
+	_assert(not bool(ui._dice_show_active), "New game/lobby reset ends the show")
+	_assert(ui._flight_layer.get_child_count() == 0, "Reset frees the travelling dice")
+	ui._reduce_motion = true
+	ui._start_dice_roll_fx(st)
+	_assert(int(ui._dice_show_count) == 3, "Reduce motion skips the show entirely")
+	_assert(not bool(ui._dice_show_active), "Reduce motion keeps the show inactive")
+	_assert(int(ui._dice_widget.d1) == 6 and int(ui._dice_widget.d2) == 6, "Bar dice show the latest value immediately, got %d/%d" % [int(ui._dice_widget.d1), int(ui._dice_widget.d2)])
+	ui._reduce_motion = false
+	_pass_section("66. Dice Roll Show Test (bigger dice, travel phase, finish, preempt, reduce motion)")
+
+func _test_badge_bounds_body(ui: Node) -> void:
+	var f := CardFace.new()
+	f.size = Vector2(62, 68)
+	f.kind = "resource"
+	f.resource = GameTypes.ResourceType.GRAIN
+	_assert(f.badge_bounds().is_empty(), "A plain card has no badges")
+	f.count = 12
+	var bounds: Array = f.badge_bounds()
+	_assert(bounds.size() == 1, "Count badge should report one bound, got %d" % bounds.size())
+	var host := Rect2(Vector2.ZERO, f.size)
+	_assert(host.encloses(bounds[0] as Rect2), "Count badge stays inside the control, got %s vs %s" % [str(bounds[0]), str(host)])
+	f.selected = true
+	bounds = f.badge_bounds()
+	_assert(host.encloses(bounds[0] as Rect2), "Count badge stays inside when selected (lifted), got %s" % str(bounds[0]))
+	f.selected = false
+	f.badge = 3
+	bounds = f.badge_bounds()
+	_assert(bounds.size() == 2, "Count and discard badges report two bounds, got %d" % bounds.size())
+	for b in bounds:
+		_assert(host.encloses(b as Rect2), "Every badge stays inside the control, got %s vs %s" % [str(b), str(host)])
+	f.count_badge = false
+	f.count = 0
+	f.badge = 4
+	bounds = f.badge_bounds()
+	_assert(bounds.size() == 1, "Discard badge alone reports one bound")
+	_assert(host.encloses(bounds[0] as Rect2), "Discard badge stays inside the control")
+	f.free()
+	_pass_section("67. CardFace Badge Bounds Test (count and discard badges never clipped)")
+
+func _test_stepper_labels_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(779068, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = 0
+	ui._refresh_ui()
+	ui._toggle_trade_tray()
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	_assert(bool(ui._trade_tray.visible), "Trade tray opens for the stepper check")
+	var font := ThemeDB.fallback_font
+	_assert(font != null, "A fallback font is available to measure labels")
+	var two_digits := font.get_string_size("10", HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x + 4.0
+	for r in GameTypes.ALL_RESOURCES:
+		var cnt: Label = ui._trade_give_gui[r]["count"]
+		_assert(cnt.custom_minimum_size.x >= two_digits, "Counter for %d reserves two digits, got %.1f < %.1f" % [r, cnt.custom_minimum_size.x, two_digits])
+		var abbr: Label = null
+		for c2 in ui._trade_tray.find_children("*", "Label", true, false):
+			var lab := c2 as Label
+			if lab.text == ui._resource_abbrev(r):
+				abbr = lab
+				break
+		_assert(abbr != null, "Abbreviation label for %d exists" % r)
+		_assert(not bool(abbr.clip_text), "Abbreviation label for %d never clips" % r)
+		_assert(abbr.custom_minimum_size.x >= font.get_string_size(abbr.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x, "Abbreviation label %s is wide enough to show its text" % abbr.text)
+	_pass_section("68. Trade Stepper Labels Test (two-digit counts and abbreviations never clipped)")
+
+func _test_token_layout_body(ui: Node) -> void:
+	var bv := BoardView.new()
+	_assert(str(bv.hex_style) == "rich", "Rich landscape is the default hex style")
+	_assert(str(bv.token_style) == "classic", "Classic token style is the default")
+	var nums: Array[int] = [2, 3, 4, 5, 6, 8, 9, 10, 11, 12]
+	var radii: Array[float] = [40.0, 60.0, 90.0]
+	for style in BoardView.TOKEN_STYLES:
+		for num in nums:
+			for hr in radii:
+				var tl: Dictionary = bv.token_layout(num, hr, style)
+				var disc_r := float(tl["disc_r"])
+				var pip_r := float(tl["pip_r"])
+				for p in (tl["pips"] as Array):
+					var pp: Vector2 = p
+					_assert(pp.length() + pip_r <= disc_r * 0.88 + 0.06, "Pip of %d overflows the %s disc at R=%s: %.2f + %.2f > %.2f" % [num, style, str(hr), pp.length(), pip_r, disc_r * 0.88])
+	var d6: float = (bv.token_layout(6, 60.0, "odds") as Dictionary)["disc_r"]
+	var d5: float = (bv.token_layout(5, 60.0, "odds") as Dictionary)["disc_r"]
+	var d4: float = (bv.token_layout(4, 60.0, "odds") as Dictionary)["disc_r"]
+	var d3: float = (bv.token_layout(3, 60.0, "odds") as Dictionary)["disc_r"]
+	var d2: float = (bv.token_layout(2, 60.0, "odds") as Dictionary)["disc_r"]
+	_assert(d6 > d5 and d5 > d4 and d4 > d3 and d3 > d2, "Odds discs must grow with the pip count: %s %s %s %s %s" % [str(d2), str(d3), str(d4), str(d5), str(d6)])
+	bv.hex_style = "nonsense"
+	_assert(str(bv.hex_style) == "rich", "An unknown hex style falls back to rich")
+	var want: Array[String] = ["rich", "classic"]
+	var got: Array[String] = []
+	for s in BoardView.HEX_STYLES:
+		got.append(str(s))
+	_assert(got == want, "HEX_STYLES is exactly rich and classic, got %s" % str(got))
+	bv.free()
+	_pass_section("69. Token Layout Test (pip padding in every style, odds scaling)")
+
+func _test_board_styles_ui_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(779070, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	_assert(str(ui._board_view.hex_style) == "rich", "The board starts with rich hexes")
+	_assert(str(ui._board_view.token_style) == "classic", "The board starts with classic tokens")
+	for hs in BoardView.HEX_STYLES:
+		ui._board_view.hex_style = hs
+		await ui.get_tree().process_frame
+		await ui.get_tree().process_frame
+		await ui.get_tree().process_frame
+		_assert(str(ui._board_view.hex_style) == str(hs), "Hex style '%s' reads back after redraws" % str(hs))
+	for ts in BoardView.TOKEN_STYLES:
+		ui._board_view.token_style = ts
+		await ui.get_tree().process_frame
+		await ui.get_tree().process_frame
+		await ui.get_tree().process_frame
+		_assert(str(ui._board_view.token_style) == str(ts), "Token style '%s' reads back after redraws" % str(ts))
+	ui._hex_style = "classic"
+	ui._token_style = "bold"
+	ui._save_settings()
+	ui._hex_style = "rich"
+	ui._token_style = "classic"
+	ui._load_settings()
+	_assert(str(ui._hex_style) == "classic", "hex_style must persist through save/load")
+	_assert(str(ui._token_style) == "bold", "token_style must persist through save/load")
+	ui._apply_settings()
+	_assert(str(ui._board_view.hex_style) == "classic", "Applied settings reach the board view")
+	_assert(str(ui._board_view.token_style) == "bold", "Applied token settings reach the board view")
+	_assert(ui._settings_hex_opt.get_selected_id() == BoardView.HEX_STYLES.find("classic"), "The hex dropdown reflects the loaded style")
+	_assert(ui._settings_token_opt.get_selected_id() == BoardView.TOKEN_STYLES.find("bold"), "The token dropdown reflects the loaded style")
+	ui._hex_style = "rich"
+	ui._token_style = "classic"
+	ui._save_settings()
+	_pass_section("70. Board Style Settings Test (styles apply live, persist, dropdowns sync)")
+
+static func _pt_in_hex(p: Vector2, poly: PackedVector2Array, tol: float) -> bool:
+	var sgn := 0
+	for i in range(poly.size()):
+		var a: Vector2 = poly[i]
+		var b: Vector2 = poly[(i + 1) % poly.size()]
+		var c := (b - a).cross(p - a)
+		if c > tol:
+			if sgn < 0:
+				return false
+			sgn = 1
+		elif c < -tol:
+			if sgn > 0:
+				return false
+			sgn = -1
+	return true
+
+func _test_style_defaults_body(ui: Node) -> void:
+	var fresh := BoardView.new()
+	_assert(str(fresh.hex_style) == "rich", "A fresh board view defaults to rich")
+	fresh.hex_style = "nonsense"
+	_assert(str(fresh.hex_style) == "rich", "The board setter rejects unknown styles to rich")
+	fresh.free()
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(779071, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	for hs in BoardView.HEX_STYLES:
+		ui._board_view.hex_style = hs
+		ui._board_view.notification(Control.NOTIFICATION_DRAW)
+		_assert(str(ui._board_view.hex_style) == str(hs), "Style %s draws and reads back" % str(hs))
+	ui._board_view.hex_style = "rich"
+	var hexp: PackedVector2Array = ui._board_view._hex_poly(Vector2(120, 90), 40.0)
+	var big := PackedVector2Array([Vector2(80, 50), Vector2(160, 50), Vector2(160, 130), Vector2(80, 130)])
+	var parts: Array = ui._board_view._clip_shape(big, hexp)
+	_assert(parts.size() >= 1, "Clipping a rect bigger than the hex returns polygons")
+	var clipped_inside := true
+	var total_pts := 0
+	for part in parts:
+		for p in (part as PackedVector2Array):
+			total_pts += 1
+			if not _pt_in_hex(p, hexp, 0.5):
+				clipped_inside = false
+	_assert(total_pts >= 3, "The clipped polygons carry points")
+	_assert(clipped_inside, "Every clipped point stays inside the hex (tol 0.5)")
+	var cfg := ConfigFile.new()
+	var sp: String = load(UI_SCRIPT_PATH).settings_path
+	cfg.load(sp)
+	cfg.set_value("settings", "tile_layout", "chip_low")
+	cfg.set_value("settings", "tile_gap", 0.04)
+	cfg.set_value("settings", "board_fill", 1.15)
+	cfg.set_value("settings", "hex_style", "classic")
+	cfg.set_value("settings", "token_style", "odds")
+	cfg.save(sp)
+	ui._load_settings()
+	_assert(str(ui._hex_style) == "classic", "An old settings file still loads hex_style")
+	_assert(str(ui._token_style) == "odds", "An old settings file still loads token_style")
+	_assert(ui.get("_tile_layout") == null, "tile_layout is gone from the UI")
+	_assert(ui.get("_tile_gap") == null, "tile_gap is gone from the UI")
+	_assert(ui.get("_board_fill") == null, "board_fill is gone from the UI")
+	_assert(ui._board_view.get("tile_layout") == null, "tile_layout is gone from the board view")
+	_assert(ui._board_view.get("tile_gap") == null, "tile_gap is gone from the board view")
+	_assert(ui._board_view.get("board_fill") == null, "board_fill is gone from the board view")
+	ui._apply_settings()
+	ui._board_view.notification(Control.NOTIFICATION_DRAW)
+	_assert(str(ui._board_view.hex_style) == "classic", "The loaded hex style applies to the board")
+	_assert(str(ui._board_view.token_style) == "odds", "The loaded token style applies to the board")
+	_assert(ui._settings_hex_opt.get_selected_id() == BoardView.HEX_STYLES.find("classic"), "The hex dropdown syncs from an old settings file")
+	cfg.load(sp)
+	cfg.set_value("settings", "hex_style", "scenes")
+	cfg.save(sp)
+	ui._load_settings()
+	_assert(str(ui._hex_style) == "rich", "An unknown saved hex style loads as rich")
+	ui._hex_style = "rich"
+	ui._token_style = "classic"
+	ui._save_settings()
+	ui._apply_settings()
+	_pass_section("71. Board Style Defaults Test (rich default, unknown fallback, clipping, old keys ignored)")
+
 func _test_sfx_body(ui: Node) -> void:
 	var sfx: Node = ui.get_node_or_null("Sfx")
 	_assert(sfx != null, "UI should own an Sfx child")
@@ -2673,9 +3080,11 @@ func _test_offer_strip_body(ui: Node) -> void:
 	_assert(str(ui._offer_strip_label.text) == "Azure offers 1 Timber for 1 Grain", "Strip headline mismatch: '%s'" % str(ui._offer_strip_label.text))
 	_assert(_strip_chip_texts(ui).contains("Dune: waiting") and _strip_chip_texts(ui).contains("Pike: waiting"), "Both responders should show waiting, got '%s'" % _strip_chip_texts(ui))
 	ui.session.submit_action(1, GameAction.respond_open_trade("counter", {GameTypes.ResourceType.IRON: 1}, {GameTypes.ResourceType.GRAIN: 1}))
-	_assert(_strip_chip_texts(ui).contains("Dune: ↺ gives 1 Iron for your 1 Grain"), "Counter chip mismatch: '%s'" % _strip_chip_texts(ui))
+	_assert(_strip_chip_texts(ui).contains("Dune: ↺ counters"), "Counter chip mismatch: '%s'" % _strip_chip_texts(ui))
 	ui._refresh_ui()
-	_assert(_find_label_containing(ui._trade_tray, "Counter: gives 1 Iron for your 1 Grain"), "Partner card should show 'gives X for your Y'")
+	_assert(_find_label_containing(ui._trade_tray, "COUNTER-OFFER"), "Partner card should carry the COUNTER-OFFER pill")
+	_assert(_find_label_containing(ui._trade_tray, "You give"), "Counter card should show the 'You give' row")
+	_assert(_find_button_by_text(ui._trade_tray, "Accept counter") != null, "Counter card should offer an Accept counter button")
 	ui.session.submit_action(0, GameAction.cancel_open_trade())
 	_assert(not bool(ui._offer_strip.visible), "Withdrawing must hide the strip")
 	_assert(_toast_texts(ui).contains("Azure withdrew the offer."), "Withdraw should toast, got '%s'" % _toast_texts(ui))
