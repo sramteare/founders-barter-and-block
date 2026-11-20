@@ -105,7 +105,7 @@ func _process(delta: float) -> void:
 				_build_anims.remove_at(i)
 		needs_redraw = true
 	if _blocker_t < 1.0:
-		_blocker_t = minf(1.0, _blocker_t + delta / maxf(0.05, 0.5 * anim_scale))
+		_blocker_t = minf(1.0, _blocker_t + delta / maxf(0.05, 0.9 * anim_scale))
 		needs_redraw = true
 	if needs_redraw:
 		queue_redraw()
@@ -1391,6 +1391,20 @@ func animate_blocker(from_tile: int) -> void:
 	_blocker_t = 0.0
 	anim_count += 1
 
+func blocker_anim_duration() -> float:
+	if reduce_motion:
+		return 0.0
+	return 0.9 * anim_scale
+
+func blocker_anim_phase() -> String:
+	if reduce_motion or _blocker_t >= 1.0 or _blocker_from_tile < 0:
+		return ""
+	if _blocker_t < 0.25:
+		return "lift"
+	if _blocker_t < 0.80:
+		return "shift"
+	return "place"
+
 func anim_total() -> int:
 	return anim_count
 
@@ -1447,9 +1461,41 @@ func _draw_blocker_slide(topo: HexMath.BoardTopology, hex_radius: float, small_f
 		return
 	var from_c := _unit_to_screen(topo.tile_centers[_blocker_from_tile], hex_radius)
 	var to_c := _unit_to_screen(topo.tile_centers[state.blocker_tile], hex_radius)
-	var t := ease(_blocker_t, 1.6)
-	var pos := from_c.lerp(to_c, t)
-	_draw_blocker_icon(pos + Vector2(0, -hex_radius * 0.06 * sin(PI * _blocker_t)), hex_radius, small_font_size)
+	var t := _blocker_t
+	var lift_h := hex_radius * 0.35
+	var pos: Vector2
+	var scale_f: float
+	var ground: Vector2
+	if t < 0.25:
+		var lu := t / 0.25
+		pos = from_c + Vector2(0, -lift_h * ease(lu, 0.6))
+		scale_f = lerpf(1.0, 1.15, lu)
+		ground = from_c
+	elif t < 0.80:
+		var su := (t - 0.25) / 0.55
+		var glide := ease(su, 1.6)
+		pos = from_c.lerp(to_c, glide) + Vector2(0, -lift_h)
+		scale_f = 1.15
+		ground = from_c.lerp(to_c, glide)
+	else:
+		var pu := (t - 0.80) / 0.20
+		var drop := ease(pu, 1.0)
+		var settle := 0.0
+		if pu > 0.75:
+			settle = sin((pu - 0.75) / 0.25 * PI) * hex_radius * 0.04
+		pos = to_c + Vector2(0, lerpf(-lift_h, 0.0, drop)) + Vector2(0, settle)
+		scale_f = lerpf(1.15, 1.0, drop)
+		if pu > 0.75:
+			scale_f = 1.0 + sin((pu - 0.75) / 0.25 * PI) * 0.05
+		ground = to_c
+	var lift_frac := clampf((ground.y - pos.y) / maxf(lift_h, 0.001), 0.0, 1.2)
+	if lift_frac > 0.02:
+		var sh_w := hex_radius * 0.34 * lerpf(1.0, 0.55, minf(lift_frac, 1.0))
+		var sh_col := Color(0.05, 0.08, 0.12, lerpf(0.35, 0.10, minf(lift_frac, 1.0)))
+		draw_set_transform(ground + Vector2(0, hex_radius * 0.10), 0.0, Vector2(1.0, 0.38))
+		draw_circle(Vector2.ZERO, sh_w, sh_col)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_draw_blocker_icon(pos, hex_radius * scale_f, int(round(float(small_font_size) * scale_f)))
 
 func spawn_tile_resource_card_fly(tile_id: int, res: int) -> void:
 	if state == null or tile_id < 0 or tile_id >= HexMath.get_topology().tile_centers.size():

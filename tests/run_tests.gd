@@ -746,6 +746,39 @@ func _start_ui_tests() -> void:
 	_queue_ui_test([
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_blocker_phases_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_steal_hold_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_steal_hold_reduce_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_steal_hold_newgame_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.HUMAN, "Ivory"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Dune"),
+	], _test_steal_flight_hotseat_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_steal_supersede_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_steal_flyer_cancel_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_steal_hold_deadline_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
 	], _test_sfx_body)
 
 func _test_hotseat_trade_ui_body(ui: Node) -> void:
@@ -1530,6 +1563,217 @@ func _test_port_geom_body(ui: Node) -> void:
 	for j in range(steps.size() - 1, -1, -1):
 		_ui_queue.push_front(steps[j])
 
+
+func _test_blocker_phases_body(ui: Node) -> void:
+	var bv: BoardView = ui._board_view
+	var st: GameState = ui.session.state
+	bv.reduce_motion = false
+	bv.anim_scale = 1.0
+	bv._blocker_t = 1.0
+	var from_tile: int = (st.blocker_tile + 1) % 19
+	_assert(bv.blocker_anim_duration() > 0.0, "Blocker anim has a positive duration when motion is on")
+	bv.animate_blocker(from_tile)
+	_assert(bv.blocker_anim_phase() == "lift", "Phase starts as lift, got %s" % bv.blocker_anim_phase())
+	bv._process(0.15)
+	_assert(bv.blocker_anim_phase() == "lift", "Still lifting at t=0.17, got %s" % bv.blocker_anim_phase())
+	bv._process(0.2)
+	_assert(bv.blocker_anim_phase() == "shift", "Shifting at t=0.39, got %s" % bv.blocker_anim_phase())
+	bv._process(0.5)
+	_assert(bv.blocker_anim_phase() == "place", "Placing at t=0.94, got %s" % bv.blocker_anim_phase())
+	bv._process(0.2)
+	_assert(bv.blocker_anim_phase() == "", "Animation reports no phase once finished, got %s" % bv.blocker_anim_phase())
+	bv.reduce_motion = true
+	bv.animate_blocker(from_tile)
+	_assert(bv.blocker_anim_duration() == 0.0, "Reduce motion reports zero duration")
+	_assert(bv.blocker_anim_phase() == "", "Reduce motion never animates the Blocker")
+	bv.reduce_motion = false
+	_pass_section("49. Blocker Lift-Shift-Place Test (phases advance lift-shift-place-empty, reduce motion off)")
+
+func _apply_fake_steal(ui: Node, victim_pid: int, thief_pid: int, res: int) -> void:
+	var st: GameState = ui.session.state
+	var vhand: Dictionary = st.players[victim_pid]["hand"]
+	var thand: Dictionary = st.players[thief_pid]["hand"]
+	vhand[res] = int(vhand.get(res, 0)) + 2
+	vhand[res] = int(vhand[res]) - 1
+	thand[res] = int(thand.get(res, 0)) + 1
+	st.last_steal = {"serial": 654321, "thief": thief_pid, "victim": victim_pid, "res": res}
+	ui._last_steal_serial = 654320
+
+func _test_steal_hold_body(ui: Node) -> void:
+	var st: GameState = ui.session.state
+	st.current_player = 0
+	var res: int = GameTypes.ResourceType.TIMBER
+	_apply_fake_steal(ui, 0, 1, res)
+	var pre_victim: int = GameTypes.hand_total(st.players[0]["hand"]) + 1
+	var pre_thief: int = GameTypes.hand_total(st.players[1]["hand"]) - 1
+	st.current_player = 1
+	var evs: Array[String] = ["%s moved the Blocker to tile %d." % [str(st.players[1].get("name", "B")), (st.blocker_tile + 3) % 19]]
+	ui._prev_blocker_tile = (st.blocker_tile + 7) % 19
+	ui._animate_from_events(evs, st)
+	_assert(bool(ui._blocker_anim_this_update), "Blocker move event marks the animation as started this update")
+	ui._announce_steal(st)
+	_assert(ui._steal_timer != null, "Card flight waits for the Blocker animation")
+	_assert(ui._displayed_hand_count(1) == pre_thief, "Thief shows the pre-steal count during the flight, got %d want %d" % [ui._displayed_hand_count(1), pre_thief])
+	_assert(ui._displayed_hand_count(0) == pre_victim, "Victim shows the pre-steal count until the card departs, got %d want %d" % [ui._displayed_hand_count(0), pre_victim])
+	ui._finish_steal_anim()
+	_assert(ui._hand_count_hold.is_empty(), "Finishing the steal animation clears the holds")
+	_assert(ui._displayed_hand_count(0) == GameTypes.hand_total(st.players[0]["hand"]), "Victim shows the real total after finishing")
+	_assert(ui._displayed_hand_count(1) == GameTypes.hand_total(st.players[1]["hand"]), "Thief shows the real total after finishing")
+	_pass_section("50. Steal Count Hold Test (displayed counts move only when the card departs and lands)")
+
+func _test_steal_hold_reduce_body(ui: Node) -> void:
+	ui._reduce_motion = true
+	ui._board_view.reduce_motion = true
+	var st: GameState = ui.session.state
+	var res: int = GameTypes.ResourceType.CLAY
+	_apply_fake_steal(ui, 0, 1, res)
+	ui._announce_steal(st)
+	_assert(ui._hand_count_hold.is_empty(), "Reduce motion sets no display holds")
+	_assert(ui._displayed_hand_count(0) == GameTypes.hand_total(st.players[0]["hand"]), "Victim shows the real total immediately with reduce motion")
+	_assert(ui._displayed_hand_count(1) == GameTypes.hand_total(st.players[1]["hand"]), "Thief shows the real total immediately with reduce motion")
+	ui._reduce_motion = false
+	ui._board_view.reduce_motion = false
+	_pass_section("51. Steal Hold Reduce-Motion Test (counts snap immediately)")
+
+func _test_steal_hold_newgame_body(ui: Node) -> void:
+	var st: GameState = ui.session.state
+	st.current_player = 1
+	var res: int = GameTypes.ResourceType.GRAIN
+	_apply_fake_steal(ui, 0, 1, res)
+	var evs: Array[String] = ["%s moved the Blocker to tile %d." % [str(st.players[1].get("name", "B")), (st.blocker_tile + 2) % 19]]
+	ui._prev_blocker_tile = (st.blocker_tile + 5) % 19
+	ui._animate_from_events(evs, st)
+	ui._announce_steal(st)
+	_assert(not ui._hand_count_hold.is_empty(), "Holds are set while the steal flight is pending")
+	ui._start_match_from_lobby_settings()
+	_assert(ui._hand_count_hold.is_empty(), "A new game clears the steal display holds")
+	_assert(ui._steal_pending_anim.is_empty(), "A new game cancels the pending steal flight")
+	_pass_section("52. Steal Hold New Game Test (starting a match clears holds and pending flight)")
+
+func _test_steal_flight_hotseat_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.HUMAN, "Ivory"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Dune"),
+	]
+	ui.session.start_match(777001, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	var reached := _ui_drive_until(ui, func(s2: GameState) -> bool:
+		return s2.phase >= GameTypes.TurnPhase.TURN_ROLL and s2.phase != GameTypes.TurnPhase.TURN_DISCARD and s2.phase != GameTypes.TurnPhase.GAME_OVER and s2.pending_discards.is_empty() and s2.open_trade.is_empty()
+	, 400)
+	_assert(bool(reached), "Match drives into normal turns")
+	if not reached:
+		_pass_section("53. Steal Flight Privacy Test (hot-seat hidden hand flies a card back)")
+		return
+	st = ui.session.state
+	st.current_player = 2
+	var res: int = GameTypes.ResourceType.FLEECE
+	_apply_fake_steal(ui, 0, 1, res)
+	_assert(bool(ui._hand_hidden()), "Hot-seat hides the viewer's hand while the bot acts")
+	ui._last_fly_kind = ""
+	ui._announce_steal(st)
+	_assert(ui._last_fly_kind == "back", "Hot-seat flight shows a card back, got %s" % ui._last_fly_kind)
+	ui._finish_steal_anim()
+	_pass_section("53. Steal Flight Privacy Test (hot-seat hidden hand flies a card back)")
+
+func _start_fake_steal_a(ui: Node, res: int, serial: int) -> void:
+	var st: GameState = ui.session.state
+	var vhand: Dictionary = st.players[0]["hand"]
+	var thand: Dictionary = st.players[1]["hand"]
+	vhand[res] = int(vhand.get(res, 0)) + 2
+	vhand[res] = int(vhand[res]) - 1
+	thand[res] = int(thand.get(res, 0)) + 1
+	st.last_steal = {"serial": serial, "thief": 1, "victim": 0, "res": res}
+	ui._last_steal_serial = serial - 1
+
+func _test_steal_supersede_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(777002, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	_start_fake_steal_a(ui, GameTypes.ResourceType.TIMBER, 654321)
+	ui._blocker_anim_this_update = false
+	ui._announce_steal(st)
+	var serial_a: int = ui._steal_anim_serial
+	_assert(serial_a == 654321, "Steal A owns the current animation serial")
+	_assert(is_instance_valid(ui._steal_flyer), "Steal A put a card in the air")
+	_start_fake_steal_a(ui, GameTypes.ResourceType.CLAY, 654322)
+	ui._blocker_anim_this_update = true
+	ui._announce_steal(st)
+	ui._blocker_anim_this_update = false
+	var serial_b: int = ui._steal_anim_serial
+	_assert(serial_b == 654322, "Steal B took over the animation serial")
+	_assert(int(ui._hand_count_hold.get(1, 0)) == -1, "B thief hold is set")
+	_assert(int(ui._hand_count_hold.get(0, 0)) == 1, "B victim hold is set")
+	_assert(int(ui._res_hold.get(GameTypes.ResourceType.CLAY, 0)) == 1, "B hand-card hold is set")
+	_assert(ui._steal_hold_deadline_ms > 0, "B armed the holds deadline")
+	ui._on_steal_card_landed(1, serial_a)
+	_assert(ui._steal_anim_serial == serial_b, "A's late landing cannot reset B's serial, got %d" % ui._steal_anim_serial)
+	_assert(int(ui._hand_count_hold.get(1, 0)) == -1, "A's late landing kept B's thief hold")
+	_assert(int(ui._hand_count_hold.get(0, 0)) == 1, "A's late landing kept B's victim hold")
+	_assert(int(ui._res_hold.get(GameTypes.ResourceType.CLAY, 0)) == 1, "A's late landing kept B's hand-card hold")
+	ui._on_steal_delay_done(serial_a)
+	_assert(not ui._steal_pending_anim.is_empty(), "A's stale delay callback cannot consume B's pending flight")
+	ui._on_steal_delay_done(serial_b)
+	_assert(ui._steal_pending_anim.is_empty(), "B's delay departs the pending flight")
+	_assert(int(ui._hand_count_hold.get(1, 0)) == -1, "Only the thief hold remains after B departs")
+	_assert(not ui._hand_count_hold.has(0), "B's victim hold cleared when the card departed")
+	_assert(ui._res_hold.is_empty(), "B's hand-card hold cleared when the card departed")
+	ui._on_steal_card_landed(1, serial_b)
+	_assert(ui._hand_count_hold.is_empty(), "B's landing clears all holds")
+	_assert(ui._res_hold.is_empty(), "B's landing clears the hand-card holds")
+	_assert(ui._displayed_hand_count(0) == GameTypes.hand_total(st.players[0]["hand"]), "Victim shows the real total after B lands")
+	_assert(ui._displayed_hand_count(1) == GameTypes.hand_total(st.players[1]["hand"]), "Thief shows the real total after B lands")
+	_assert(ui._steal_anim_serial == -1, "Finished animation releases the serial")
+	ui._finish_steal_anim()
+	_pass_section("54. Superseded Steal Flight Test (a late landing or stale timer cannot break the newer steal)")
+
+func _test_steal_flyer_cancel_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(777003, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	_start_fake_steal_a(ui, GameTypes.ResourceType.GRAIN, 654331)
+	ui._blocker_anim_this_update = false
+	ui._announce_steal(st)
+	var flyer: CardFace = ui._steal_flyer
+	_assert(is_instance_valid(flyer), "A flyer is in the air before finishing")
+	ui._finish_steal_anim()
+	_assert(is_instance_valid(flyer) and flyer.is_queued_for_deletion(), "Finishing a steal queues the in-flight card for deletion")
+	_assert(ui._hand_count_hold.is_empty(), "Finishing clears the holds")
+	_assert(ui._res_hold.is_empty(), "Finishing clears the hand-card holds")
+	_assert(ui._steal_flyer == null, "The flyer reference is dropped on finish")
+	_pass_section("55. Steal Flyer Cancel Test (finish removes the superseded card instead of letting it land)")
+
+func _test_steal_hold_deadline_body(ui: Node) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(777004, seats, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	_start_fake_steal_a(ui, GameTypes.ResourceType.IRON, 654341)
+	ui._blocker_anim_this_update = false
+	ui._announce_steal(st)
+	ui._hand_count_hold[1] = int(ui._hand_count_hold.get(1, 0)) - 1
+	ui._steal_hold_deadline_ms = Time.get_ticks_msec() - 1
+	ui._on_ai_timer_tick()
+	_assert(ui._hand_count_hold.is_empty(), "The deadline tick clears holds that outlived their animation")
+	_assert(ui._res_hold.is_empty(), "The deadline tick clears the hand-card holds too")
+	_assert(ui._displayed_hand_count(1) == GameTypes.hand_total(st.players[1]["hand"]), "Displayed counts snap back to the real totals after the deadline")
+	_pass_section("56. Steal Hold Deadline Test (a stuck animation cannot keep holds past its tick)")
 func _test_sfx_body(ui: Node) -> void:
 	var sfx: Node = ui.get_node_or_null("Sfx")
 	_assert(sfx != null, "UI should own an Sfx child")
@@ -2552,7 +2796,11 @@ func _test_action_anim_body(ui: Node) -> void:
 	ui._animate_from_events(many, st)
 	await ui.get_tree().process_frame
 	_assert(ui._toast_layer.get_child_count() <= 3, "At most 3 toasts stack, got %d" % ui._toast_layer.get_child_count())
-	ui._fly_card_back(0, 1)
+	ui._reduce_motion = false
+	ui._start_steal_anim(0, 1, GameTypes.ResourceType.TIMBER, st)
+	_assert(ui._last_fly_kind != "", "Steal flight starts once motion is back on")
+	_assert(ui._hand_count_hold.has(1), "Thief gets a display hold while the card is in flight")
+	ui._finish_steal_anim()
 	ui._reduce_motion = false
 	ui._board_view.reduce_motion = false
 	_pass_section("46. Action Feedback Test (bot toasts, build anims, blocker slide, reduce motion)")

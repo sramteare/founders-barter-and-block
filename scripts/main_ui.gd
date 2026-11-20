@@ -18,6 +18,18 @@ var _offer_strip_chips: HBoxContainer = null
 var _trade_close_btn: Button = null
 var _trade_last_ot_from: int = -1
 var _last_steal_serial: int = 0
+var _hand_count_hold: Dictionary = {}
+var _res_hold: Dictionary = {}
+var _scoreboard_mini_hands: Dictionary = {}
+var _steal_timer: SceneTreeTimer = null
+var _steal_anim_serial: int = -1
+var _steal_anim_turn: int = -1
+var _steal_pending_anim: Dictionary = {}
+var _blocker_anim_this_update: bool = false
+var _last_fly_kind: String = ""
+var _steal_flyer: CardFace = null
+var _steal_hold_deadline_ms: int = 0
+var _steal_delay_cb: Callable = Callable()
 var _prev_blocker_tile: int = -1
 var _scoreboard_row_panels: Dictionary = {}
 
@@ -213,6 +225,8 @@ func _setup_timer() -> void:
 	add_child(_ai_timer)
 
 func _on_ai_timer_tick() -> void:
+	if not _hand_count_hold.is_empty() and _steal_hold_deadline_ms > 0 and Time.get_ticks_msec() > _steal_hold_deadline_ms:
+		_finish_steal_anim()
 	if not auto_ai or session == null or session.state == null:
 		return
 	if _any_overlay_visible():
@@ -1130,6 +1144,7 @@ func _build_splash_overlay() -> void:
 
 func _show_splash(state: GameState) -> void:
 	_splash_shown = true
+	_finish_steal_anim()
 	var standings: Array = state.get_standings()
 	var winner_pid: int = int(state.winner)
 	var ordered: Array = []
@@ -1202,6 +1217,7 @@ func _show_splash(state: GameState) -> void:
 	_splash_new_game_btn.grab_focus()
 
 func _show_lobby() -> void:
+	_finish_steal_anim()
 	for i in range(_seat_type_opts.size()):
 		var sel_type: int = 0 if i == 0 else _settings_ai_difficulty
 		_seat_type_opts[i].select(_seat_type_opts[i].get_item_index(sel_type))
@@ -1656,6 +1672,7 @@ func _start_match_from_lobby_settings() -> void:
 	_sfx_prev_current = -1
 	_sfx_won = false
 	_last_steal_serial = 0
+	_finish_steal_anim()
 	_splash_shown = false
 	session.start_match(seed_val, configs, _balanced_check.button_pressed)
 
@@ -1746,9 +1763,11 @@ func _announce_steal(state: GameState) -> void:
 			_show_toast("You stole a card from %s." % victim_name, Color(0.18, 0.42, 0.2), 3.5)
 	else:
 		_show_toast("%s stole a card from %s." % [thief_name, victim_name], Palette.ACCENT_GOLD.darkened(0.25))
-	_fly_card_back(victim, thief)
+	_start_steal_anim(victim, thief, int(state.last_steal.get("res", -1)), state)
 
 func _on_state_updated(state: GameState, events: Array[String]) -> void:
+	if _steal_anim_turn >= 0 and state.turn_number != _steal_anim_turn:
+		_finish_steal_anim()
 	_board_view.set_state(state)
 	var rolled_now := false
 	var built_now := false
@@ -1803,6 +1822,7 @@ func _on_state_updated(state: GameState, events: Array[String]) -> void:
 	_refresh_ui()
 
 func _animate_from_events(events: Array[String], state: GameState) -> void:
+	_blocker_anim_this_update = false
 	if _board_view == null or session == null:
 		return
 	for ev in events:
@@ -1824,6 +1844,7 @@ func _animate_from_events(events: Array[String], state: GameState) -> void:
 			var t := _event_int(ev, "tile ")
 			if t >= 0 and _prev_blocker_tile >= 0:
 				_board_view.animate_blocker(_prev_blocker_tile)
+				_blocker_anim_this_update = _board_view.blocker_anim_phase() != ""
 		if pid >= 0 and pid < session.seats.size() and session.seats[pid].is_ai():
 			_maybe_bot_toast(ev, pid, state)
 
@@ -1883,33 +1904,175 @@ func _maybe_bot_toast(ev: String, pid: int, state: GameState) -> void:
 func _fly_anchor(pid: int) -> Vector2:
 	if pid == _view_pid() and _hand_bar_panel != null and _hand_bar_panel.visible:
 		return _hand_bar_panel.get_global_rect().get_center()
-	var row: Control = _scoreboard_row_panels.get(pid, null)
-	if row != null and row.visible and row.is_inside_tree():
-		return row.get_global_rect().get_center()
+	var raw: Variant = _scoreboard_row_panels.get(pid, null)
+	if raw is Control and is_instance_valid(raw) and (raw as Control).visible and (raw as Control).is_inside_tree():
+		return (raw as Control).get_global_rect().get_center()
 	return Vector2.INF
 
-func _fly_card_back(from_pid: int, to_pid: int) -> void:
-	if _reduce_motion:
+func _to_ui_local(global_pos: Vector2) -> Vector2:
+	return get_global_transform().affine_inverse() * global_pos
+
+func _displayed_hand_count(pid: int) -> int:
+	if session == null or session.state == null or pid < 0 or pid >= session.state.players.size():
+		return 0
+	var real: int = GameTypes.hand_total(session.state.players[pid].get("hand", {}))
+	return maxi(0, real + int(_hand_count_hold.get(pid, 0)))
+
+func _finish_steal_anim() -> void:
+	if _steal_timer != null:
+		if _steal_delay_cb.is_valid() and _steal_timer.timeout.is_connected(_steal_delay_cb):
+			_steal_timer.timeout.disconnect(_steal_delay_cb)
+		_steal_timer = null
+	_steal_delay_cb = Callable()
+	_steal_anim_serial = -1
+	_steal_anim_turn = -1
+	_steal_pending_anim = {}
+	_steal_hold_deadline_ms = 0
+	if is_instance_valid(_steal_flyer):
+		_steal_flyer.queue_free()
+	_steal_flyer = null
+	if _hand_count_hold.is_empty() and _res_hold.is_empty():
 		return
-	var from := _fly_anchor(from_pid)
-	var to := _fly_anchor(to_pid)
+	_hand_count_hold.clear()
+	_res_hold.clear()
+	_refresh_ui()
+
+func _start_steal_anim(victim: int, thief: int, res: int, state: GameState) -> void:
+	_finish_steal_anim()
+	if _reduce_motion or _board_view == null or victim < 0 or thief < 0:
+		return
+	_steal_anim_serial = _last_steal_serial
+	_steal_anim_turn = state.turn_number
+	_hand_count_hold[thief] = int(_hand_count_hold.get(thief, 0)) - 1
+	_hand_count_hold[victim] = int(_hand_count_hold.get(victim, 0)) + 1
+	if victim == _view_pid() and res >= 0 and not _hand_hidden():
+		_res_hold[res] = 1
+	elif thief == _view_pid() and res >= 0 and not _hand_hidden() and _human_seat_count() <= 1:
+		_res_hold[res] = -1
+	_refresh_ui()
+	_steal_pending_anim = {"victim": victim, "thief": thief, "res": res}
+	_steal_hold_deadline_ms = Time.get_ticks_msec() + int((_board_view.blocker_anim_duration() + 0.7 + 1.0) * 1000.0)
+	var delay_serial := _steal_anim_serial
+	var dur := _board_view.blocker_anim_duration()
+	if _blocker_anim_this_update and dur > 0.0:
+		_steal_timer = get_tree().create_timer(dur)
+		_steal_delay_cb = _on_steal_delay_done.bind(delay_serial)
+		_steal_timer.timeout.connect(_steal_delay_cb)
+		return
+	_launch_steal_flight(delay_serial)
+
+func _on_steal_delay_done(serial: int) -> void:
+	if serial != _steal_anim_serial or _steal_pending_anim.is_empty():
+		return
+	_steal_timer = null
+	_launch_steal_flight(serial)
+
+func _launch_steal_flight(serial: int) -> void:
+	var data: Dictionary = _steal_pending_anim
+	_steal_pending_anim = {}
+	if data.is_empty() or serial != _steal_anim_serial:
+		return
+	var victim := int(data["victim"])
+	var thief := int(data["thief"])
+	var res := int(data["res"])
+	if _hand_count_hold.has(victim):
+		_hand_count_hold.erase(victim)
+	if int(_res_hold.get(res, 0)) > 0:
+		_res_hold.erase(res)
+	_refresh_ui()
+	var v := _view_pid()
+	var single_human := _human_seat_count() <= 1
+	var show_face := res >= 0 and not _hand_hidden() and (
+		victim == v or (thief == v and single_human)
+	)
+	var from := Vector2.INF
+	if victim == v and res >= 0 and not _hand_hidden():
+		var vface: CardFace = _res_card_refs.get(res, null)
+		if vface != null and vface.visible:
+			from = _to_ui_local(vface.get_global_rect().get_center())
+	if from == Vector2.INF:
+		var a_from := _fly_anchor(victim)
+		if a_from != Vector2.INF:
+			from = _to_ui_local(a_from)
+	var to := Vector2.INF
+	if thief == v and res >= 0 and not _hand_hidden():
+		var tface: CardFace = _res_card_refs.get(res, null)
+		if tface != null and tface.visible:
+			to = _to_ui_local(tface.get_global_rect().get_center())
+	if to == Vector2.INF:
+		var raw_stack: Variant = _scoreboard_mini_hands.get(thief, null)
+		if raw_stack is MiniHandStack and is_instance_valid(raw_stack) and (raw_stack as Control).is_inside_tree():
+			to = _to_ui_local((raw_stack as Control).get_global_rect().get_center())
 	if from == Vector2.INF or to == Vector2.INF:
+		_finish_steal_anim()
 		return
+	_spawn_steal_flyer(from, to, res if show_face else -1, thief, serial)
+
+func _spawn_steal_flyer(from: Vector2, to: Vector2, res_id: int, thief_pid: int, serial: int) -> void:
 	var f := CardFace.new()
-	f.kind = "back"
 	f.focusable = false
 	f.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	f.custom_minimum_size = Vector2(30, 30.0 / CardFace.RATIO)
+	if res_id >= 0:
+		f.kind = "resource"
+		f.resource = res_id
+	else:
+		f.kind = "back"
+	_last_fly_kind = f.kind
+	_steal_flyer = f
+	var fly_w := 44.0
+	f.custom_minimum_size = Vector2(fly_w, fly_w / CardFace.RATIO)
 	add_child(f)
-	f.size = Vector2(30, 42)
+	f.size = Vector2(fly_w, fly_w / CardFace.RATIO)
 	f.pivot_offset = f.size * 0.5
 	f.position = from - f.size * 0.5
-	var dur := 0.6 * (0.45 if _settings_speed_idx >= 2 else 1.0)
+	var dur := 0.7 * (0.45 if _settings_speed_idx >= 2 else 1.0)
+	var arc_h := 46.0
 	var tw := f.create_tween()
-	tw.tween_property(f, "position", to - f.size * 0.5, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(f, "rotation_degrees", 14.0, dur)
-	tw.tween_property(f, "modulate:a", 0.0, 0.18)
-	tw.tween_callback(f.queue_free)
+	tw.tween_method(func(t: float) -> void:
+		if not is_instance_valid(f):
+			return
+		var p := from.lerp(to, ease(t, 1.2))
+		p.y -= sin(t * PI) * arc_h
+		f.position = p - f.size * 0.5
+	, 0.0, 1.0, dur)
+	tw.tween_property(f, "scale", Vector2(0.4, 0.4), 0.18)
+	tw.parallel().tween_property(f, "modulate:a", 0.0, 0.18)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(f):
+			f.queue_free()
+		_on_steal_card_landed(thief_pid, serial)
+	)
+
+func _on_steal_card_landed(thief_pid: int, serial: int) -> void:
+	if serial != _steal_anim_serial:
+		return
+	_steal_anim_serial = -1
+	_steal_anim_turn = -1
+	_steal_flyer = null
+	if _hand_count_hold.has(thief_pid):
+		_hand_count_hold.erase(thief_pid)
+	var stripped: Array = []
+	for r in _res_hold.keys():
+		if int(_res_hold[r]) < 0:
+			stripped.append(r)
+	for r in stripped:
+		_res_hold.erase(r)
+	_refresh_ui()
+	_pulse_mini_hand(thief_pid)
+	if _sfx != null:
+		_sfx.play("click")
+
+func _pulse_mini_hand(pid: int) -> void:
+	if _reduce_motion:
+		return
+	var raw_stack: Variant = _scoreboard_mini_hands.get(pid, null)
+	if not (raw_stack is Control) or not is_instance_valid(raw_stack) or not (raw_stack as Control).is_inside_tree():
+		return
+	var stack: Control = raw_stack
+	stack.pivot_offset = stack.size * 0.5
+	var tw := stack.create_tween()
+	tw.tween_property(stack, "scale", Vector2(1.25, 1.25), 0.12)
+	tw.tween_property(stack, "scale", Vector2.ONE, 0.16)
 
 func _spawn_production_popups(state: GameState) -> void:
 	if _board_view == null:
@@ -2210,6 +2373,8 @@ func _refresh_ui() -> void:
 	_update_device_pass_cover(hand_hidden, view_pid)
 	for child in _scoreboard_box.get_children():
 		child.queue_free()
+	_scoreboard_mini_hands.clear()
+	_scoreboard_row_panels.clear()
 	for p_id in range(state.num_players):
 		var p_data: Dictionary = state.players[p_id]
 		var seat_cfg: SeatConfig = session.seats[p_id] if p_id < session.seats.size() else null
@@ -2257,8 +2422,9 @@ func _refresh_ui() -> void:
 		var dev_cnt: int = p_data.get("dev_cards", []).size() + p_data.get("new_dev_cards", []).size()
 		var mini_hand := MiniHandStack.new()
 		row.add_child(mini_hand)
-		mini_hand.res_count = hand_cnt
+		mini_hand.res_count = _displayed_hand_count(p_id)
 		mini_hand.act_count = dev_cnt
+		_scoreboard_mini_hands[p_id] = mini_hand
 
 		if state.longest_route_holder == p_id:
 			row.add_child(_make_pill("Route +2", Color(Palette.ACCENT_GREEN, 0.40), Palette.TEXT))
@@ -2288,7 +2454,7 @@ func _refresh_ui() -> void:
 			face.count = 0
 			face.badge = 0
 			continue
-		face.count = int(hand.get(r, 0))
+		face.count = maxi(0, int(hand.get(r, 0)) + int(_res_hold.get(r, 0)))
 		face.badge = int(_discard_pick.get(r, 0)) if discard_badges else 0
 		if not pid_changed and face.count > int(_prev_dash_hand.get(r, 0)):
 			_pulse_card(face)
