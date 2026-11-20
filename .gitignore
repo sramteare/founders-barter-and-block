@@ -1,3 +1,9 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+/builds/
+/export/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -7,12 +13,4 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
-
-# Dependencies & Build Outputs
-node_modules/
-dist/
-build/
-.dart_tool/
 *.log
-.env
-.env.*
