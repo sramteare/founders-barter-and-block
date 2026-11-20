@@ -16,6 +16,7 @@ var _offer_strip: PanelContainer = null
 var _offer_strip_label: Label = null
 var _offer_strip_chips: HBoxContainer = null
 var _trade_close_btn: Button = null
+var _trade_scroll: ScrollContainer = null
 var _trade_last_ot_from: int = -1
 var _last_steal_serial: int = 0
 var _hand_count_hold: Dictionary = {}
@@ -28,6 +29,11 @@ var _steal_pending_anim: Dictionary = {}
 var _blocker_anim_this_update: bool = false
 var _last_fly_kind: String = ""
 var _steal_flyer: CardFace = null
+var _prev_flight_hands: Array = []
+var _prev_flight_bank: Dictionary = {}
+var _last_flights: Array = []
+var _flight_seen_steal_serial: int = -1
+var _flight_layer: Control = null
 var _steal_hold_deadline_ms: int = 0
 var _steal_delay_cb: Callable = Callable()
 var _prev_blocker_tile: int = -1
@@ -58,8 +64,6 @@ var _board_view: BoardView = null
 var _center_split: HSplitContainer = null
 var _scoreboard_box: VBoxContainer = null
 var _bank_faces: Dictionary = {}
-var _bank_count_labels: Dictionary = {}
-var _bank_deck_label: Label = null
 var _bank_deck_face: CardFace = null
 var _status_banner_label: Label = null
 
@@ -430,17 +434,11 @@ func _build_ui() -> void:
 		bf.count_badge = false
 		bf.kind = "resource"
 		bf.resource = r
-		bf.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var res_id := r
 		bf.tooltip_text = "%s in the bank" % GameTypes.resource_name(res_id)
 		bcol.add_child(bf)
-		var blbl := Label.new()
-		blbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		blbl.add_theme_font_size_override("font_size", 13)
-		blbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bcol.add_child(blbl)
+		bf.mouse_filter = Control.MOUSE_FILTER_PASS
 		_bank_faces[r] = bf
-		_bank_count_labels[r] = blbl
 	var deck_sep := VSeparator.new()
 	deck_sep.custom_minimum_size = Vector2(8, 40)
 	bank_row.add_child(deck_sep)
@@ -456,12 +454,7 @@ func _build_ui() -> void:
 	deck_face.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	deck_face.tooltip_text = "Action Cards left in the deck"
 	_bank_deck_face = deck_face
-	var deck_lbl := Label.new()
-	deck_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	deck_lbl.add_theme_font_size_override("font_size", 13)
-	deck_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	deck_col.add_child(deck_lbl)
-	_bank_deck_label = deck_lbl
+	deck_face.mouse_filter = Control.MOUSE_FILTER_PASS
 
 	# Costs live in the "?" popover next to the menu; building happens on the board.
 
@@ -701,6 +694,7 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_bar_extra_nodes.append(_end_turn_btn)
 
 	_build_device_pass_cover()
+	_build_flight_layer()
 
 func _make_cost_cell(r: int, amt: int) -> HBoxContainer:
 	var cell := HBoxContainer.new()
@@ -1071,6 +1065,7 @@ func _close_overlays() -> void:
 
 func _build_splash_overlay() -> void:
 	_splash_overlay = ColorRect.new()
+	_splash_overlay.z_index = 2
 	_splash_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_splash_overlay.color = Color(0.12, 0.09, 0.06, 0.62)
 	_splash_overlay.visible = false
@@ -1145,6 +1140,7 @@ func _build_splash_overlay() -> void:
 func _show_splash(state: GameState) -> void:
 	_splash_shown = true
 	_finish_steal_anim()
+	_reset_flight_state()
 	var standings: Array = state.get_standings()
 	var winner_pid: int = int(state.winner)
 	var ordered: Array = []
@@ -1218,6 +1214,7 @@ func _show_splash(state: GameState) -> void:
 
 func _show_lobby() -> void:
 	_finish_steal_anim()
+	_reset_flight_state()
 	for i in range(_seat_type_opts.size()):
 		var sel_type: int = 0 if i == 0 else _settings_ai_difficulty
 		_seat_type_opts[i].select(_seat_type_opts[i].get_item_index(sel_type))
@@ -1255,6 +1252,7 @@ func _add_settings_row(parent: VBoxContainer, label_text: String, hint_text: Str
 
 func _build_settings_overlay() -> void:
 	_settings_overlay = ColorRect.new()
+	_settings_overlay.z_index = 2
 	_settings_overlay.color = Color(Palette.INK, 0.62)
 	_settings_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_settings_overlay.visible = false
@@ -1393,6 +1391,7 @@ func _build_settings_overlay() -> void:
 
 func _build_help_overlay() -> void:
 	_help_overlay = ColorRect.new()
+	_help_overlay.z_index = 2
 	_help_overlay.color = Color(Palette.INK, 0.62)
 	_help_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_help_overlay.visible = false
@@ -1673,6 +1672,7 @@ func _start_match_from_lobby_settings() -> void:
 	_sfx_won = false
 	_last_steal_serial = 0
 	_finish_steal_anim()
+	_reset_flight_state()
 	_splash_shown = false
 	session.start_match(seed_val, configs, _balanced_check.button_pressed)
 
@@ -1820,6 +1820,7 @@ func _on_state_updated(state: GameState, events: Array[String]) -> void:
 		_show_splash(state)
 	_prev_blocker_tile = state.blocker_tile
 	_refresh_ui()
+	_compute_flights(state)
 
 func _animate_from_events(events: Array[String], state: GameState) -> void:
 	_blocker_anim_this_update = false
@@ -2009,6 +2010,11 @@ func _launch_steal_flight(serial: int) -> void:
 	_spawn_steal_flyer(from, to, res if show_face else -1, thief, serial)
 
 func _spawn_steal_flyer(from: Vector2, to: Vector2, res_id: int, thief_pid: int, serial: int) -> void:
+	_last_fly_kind = "resource" if res_id >= 0 else "back"
+	_steal_flyer = _spawn_card_flyer(from, to, res_id, 0.0, func() -> void: _on_steal_card_landed(thief_pid, serial), 44.0)
+
+
+func _spawn_card_flyer(from: Vector2, to: Vector2, res_id: int, delay: float, on_landed: Callable, px := 44.0) -> CardFace:
 	var f := CardFace.new()
 	f.focusable = false
 	f.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2017,17 +2023,17 @@ func _spawn_steal_flyer(from: Vector2, to: Vector2, res_id: int, thief_pid: int,
 		f.resource = res_id
 	else:
 		f.kind = "back"
-	_last_fly_kind = f.kind
-	_steal_flyer = f
-	var fly_w := 44.0
-	f.custom_minimum_size = Vector2(fly_w, fly_w / CardFace.RATIO)
-	add_child(f)
-	f.size = Vector2(fly_w, fly_w / CardFace.RATIO)
+	f.custom_minimum_size = Vector2(px, px / CardFace.RATIO)
+	var layer: Node = _flight_layer if _flight_layer != null and is_instance_valid(_flight_layer) else self
+	layer.add_child(f)
+	f.size = Vector2(px, px / CardFace.RATIO)
 	f.pivot_offset = f.size * 0.5
 	f.position = from - f.size * 0.5
 	var dur := 0.7 * (0.45 if _settings_speed_idx >= 2 else 1.0)
 	var arc_h := 46.0
 	var tw := f.create_tween()
+	if delay > 0.0:
+		tw.tween_interval(delay)
 	tw.tween_method(func(t: float) -> void:
 		if not is_instance_valid(f):
 			return
@@ -2040,8 +2046,155 @@ func _spawn_steal_flyer(from: Vector2, to: Vector2, res_id: int, thief_pid: int,
 	tw.tween_callback(func() -> void:
 		if is_instance_valid(f):
 			f.queue_free()
-		_on_steal_card_landed(thief_pid, serial)
+		if on_landed.is_valid():
+			on_landed.call()
 	)
+	return f
+
+
+func _build_flight_layer() -> void:
+	_flight_layer = Control.new()
+	_flight_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_flight_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_flight_layer.z_index = 1
+	add_child(_flight_layer)
+
+
+func _reset_flight_state() -> void:
+	_prev_flight_hands = []
+	_prev_flight_bank = {}
+	_flight_seen_steal_serial = -1
+	_last_flights = []
+	if _flight_layer != null and is_instance_valid(_flight_layer):
+		for c in _flight_layer.get_children():
+			c.queue_free()
+
+
+func _store_flight_state(state: GameState) -> void:
+	_prev_flight_hands = []
+	for p in state.players:
+		_prev_flight_hands.append((p.get("hand", {}) as Dictionary).duplicate())
+	_prev_flight_bank = (state.bank as Dictionary).duplicate()
+
+
+func _flight_anchor(pid: int, res: int) -> Vector2:
+	if pid == -1:
+		var bf: CardFace = _bank_faces.get(res, null)
+		if bf == null or not is_instance_valid(bf) or not bf.is_inside_tree():
+			return Vector2.INF
+		var g := bf.get_global_transform()
+		return _to_ui_local(g * Vector2(bf.size.x * 0.5, minf(bf.size.y, bf.size.x / CardFace.RATIO) * 0.5))
+	if pid == _view_pid() and not _hand_hidden():
+		var face: CardFace = _res_card_refs.get(res, null)
+		if face != null and is_instance_valid(face) and face.visible and face.is_inside_tree():
+			return _to_ui_local(face.get_global_rect().get_center())
+	var raw: Variant = _scoreboard_mini_hands.get(pid, null)
+	if raw is MiniHandStack and is_instance_valid(raw) and (raw as Control).is_inside_tree():
+		return _to_ui_local((raw as Control).get_global_rect().get_center())
+	return Vector2.INF
+
+
+func _flight_landed(to_pid: int, res: int) -> void:
+	if to_pid == -1:
+		var bf: CardFace = _bank_faces.get(res, null)
+		if bf != null and is_instance_valid(bf):
+			_pulse_card(bf)
+		return
+	if to_pid == _view_pid() and not _hand_hidden():
+		var face: CardFace = _res_card_refs.get(res, null)
+		if face != null and is_instance_valid(face):
+			_pulse_card(face)
+		return
+	_pulse_mini_hand(to_pid)
+
+
+func _compute_flights(state: GameState) -> void:
+	if _prev_flight_hands.size() != state.players.size() or _prev_flight_bank.is_empty():
+		_last_flights = []
+		_store_flight_state(state)
+		return
+	var ls: Dictionary = state.last_steal
+	var steal_active := false
+	if not ls.is_empty() and int(ls.get("serial", -1)) != _flight_seen_steal_serial:
+		steal_active = true
+		_flight_seen_steal_serial = int(ls.get("serial", -1))
+	var deltas: Array = []
+	for p in range(state.players.size()):
+		var before: Dictionary = _prev_flight_hands[p]
+		var after: Dictionary = state.players[p].get("hand", {})
+		var d: Dictionary = {}
+		for r in GameTypes.ALL_RESOURCES:
+			var dv := int(after.get(r, 0)) - int(before.get(r, 0))
+			if dv != 0:
+				d[r] = dv
+		deltas.append(d)
+	var bd: Dictionary = {}
+	for r in GameTypes.ALL_RESOURCES:
+		var dv2 := int(state.bank.get(r, 0)) - int(_prev_flight_bank.get(r, 0))
+		if dv2 != 0:
+			bd[r] = dv2
+	if steal_active:
+		var sr := int(ls.get("res", -1))
+		var vic := int(ls.get("victim", -1))
+		var thi := int(ls.get("thief", -1))
+		if sr >= 0 and vic >= 0 and vic < deltas.size():
+			(deltas[vic] as Dictionary)[sr] = int((deltas[vic] as Dictionary).get(sr, 0)) + 1
+		if sr >= 0 and thi >= 0 and thi < deltas.size():
+			(deltas[thi] as Dictionary)[sr] = int((deltas[thi] as Dictionary).get(sr, 0)) - 1
+	var transfers: Array = []
+	for r in GameTypes.ALL_RESOURCES:
+		var sources: Array = []
+		var sinks: Array = []
+		var b := int(bd.get(r, 0))
+		if b < 0:
+			sources.append({"id": -1, "left": -b})
+		elif b > 0:
+			sinks.append({"id": -1, "left": b})
+		for p in range(deltas.size()):
+			var dv3 := int((deltas[p] as Dictionary).get(r, 0))
+			if dv3 < 0:
+				sources.append({"id": p, "left": -dv3})
+			elif dv3 > 0:
+				sinks.append({"id": p, "left": dv3})
+		var si := 0
+		while not sources.is_empty():
+			var src: Dictionary = sources[0]
+			while int(src["left"]) > 0 and si < sinks.size():
+				var snk: Dictionary = sinks[si]
+				var n := mini(int(src["left"]), int(snk["left"]))
+				if n > 0:
+					transfers.append({"from": int(src["id"]), "to": int(snk["id"]), "res": r, "n": n})
+					src["left"] = int(src["left"]) - n
+					snk["left"] = int(snk["left"]) - n
+				if int(snk["left"]) <= 0:
+					si += 1
+			if int(src["left"]) <= 0:
+				sources.pop_front()
+			elif si >= sinks.size():
+				break
+	_last_flights = transfers
+	_store_flight_state(state)
+	if _reduce_motion:
+		return
+	var spawned := 0
+	var delay := 0.0
+	for tr in transfers:
+		if spawned >= 10:
+			break
+		var res_id := int(tr["res"])
+		var from := _flight_anchor(int(tr["from"]), res_id)
+		var to := _flight_anchor(int(tr["to"]), res_id)
+		if from == Vector2.INF or to == Vector2.INF:
+			continue
+		var to_pid := int(tr["to"])
+		var landed := func() -> void: _flight_landed(to_pid, res_id)
+		var k := mini(int(tr["n"]), 3)
+		for i in range(k):
+			if spawned >= 10:
+				break
+			_spawn_card_flyer(from, to, res_id, delay, landed, 40.0)
+			delay += 0.07
+			spawned += 1
 
 func _on_steal_card_landed(thief_pid: int, serial: int) -> void:
 	if serial != _steal_anim_serial:
@@ -2104,8 +2257,6 @@ func _spawn_production_popups(state: GameState) -> void:
 						view_prod += gain
 		if produced > 0:
 			_board_view.spawn_tile_resource_popup(t_id, res, produced)
-			if view_prod > 0 and not _hand_hidden():
-				_board_view.spawn_tile_resource_card_fly(t_id, res)
 
 func _on_action_rejected(player_id: int, error: String) -> void:
 	_append_log("[color=#7a2a20][Seat %d Invalid Action] %s[/color]" % [player_id + 1, error])
@@ -2186,6 +2337,7 @@ func _guard_action_button_focus(btn: Control) -> void:
 func _build_device_pass_cover() -> void:
 	_device_pass_cover = PanelContainer.new()
 	_device_pass_cover.visible = false
+	_device_pass_cover.z_index = 10
 	var st := StyleBoxFlat.new()
 	st.bg_color = Palette.PANEL_BG
 	st.set_border_width_all(2)
@@ -2450,6 +2602,7 @@ func _refresh_ui() -> void:
 		if face == null:
 			continue
 		face.hidden_card = hand_hidden
+		face.tooltip_text = _hand_card_tooltip(state, r, hand_hidden, int(hand.get(r, 0)))
 		if hand_hidden:
 			face.count = 0
 			face.badge = 0
@@ -3024,34 +3177,21 @@ func _discard_mode_active() -> bool:
 func _refresh_bank_section(state: GameState) -> void:
 	if _bank_faces.is_empty() or state == null:
 		return
-	var supply := float(GameState.TOTAL_RESOURCE_SUPPLY)
 	for r in GameTypes.ALL_RESOURCES:
 		var bf: CardFace = _bank_faces.get(r, null)
 		if bf == null:
 			continue
 		var cnt := int(state.bank.get(r, 0))
 		bf.count = cnt
-		bf.stack_depth = clampi(int(ceil(float(cnt) / supply * 4.0)), 0, 4)
-		var blbl: Label = _bank_count_labels.get(r, null)
-		if blbl != null:
-			_set_bank_label(blbl, cnt)
+		bf.pile_count = cnt
+		bf.pile_low_tint = cnt <= 4
+		bf.tooltip_text = "%s in the bank: %d" % [GameTypes.resource_name(r), cnt]
 	if _bank_deck_face != null:
 		var dcnt := state.dev_deck.size()
 		_bank_deck_face.count = dcnt
-		_bank_deck_face.stack_depth = clampi(int(ceil(float(dcnt) / 25.0 * 4.0)), 0, 4)
-		if _bank_deck_label != null:
-			_set_bank_label(_bank_deck_label, dcnt)
-
-func _set_bank_label(lbl: Label, n: int) -> void:
-	var col := Palette.TEXT
-	if n <= 0:
-		col = Palette.TEXT_MUTED
-	elif n <= 4:
-		col = Color(0.68, 0.30, 0.14)
-	lbl.add_theme_color_override("font_outline_color", col)
-	lbl.add_theme_constant_override("outline_size", 2)
-	lbl.add_theme_color_override("font_color", col)
-	lbl.text = str(n) if n > 0 else "empty"
+		_bank_deck_face.pile_count = dcnt
+		_bank_deck_face.pile_low_tint = dcnt <= 4
+		_bank_deck_face.tooltip_text = "Action Cards left: %d" % dcnt
 
 
 func _refresh_discard_picker(state: GameState, acting_id: int, needs_discard: bool, hand_hidden: bool) -> void:
@@ -3176,10 +3316,16 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_tray.clip_contents = true
 	parent_column.add_child(_trade_tray)
 
+	_trade_scroll = ScrollContainer.new()
+	_trade_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_trade_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_trade_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_trade_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_trade_tray.add_child(_trade_scroll)
 	_trade_content = VBoxContainer.new()
 	_trade_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_trade_content.add_theme_constant_override("separation", 4)
-	_trade_tray.add_child(_trade_content)
+	_trade_scroll.add_child(_trade_content)
 
 	var head_row := HBoxContainer.new()
 	head_row.add_theme_constant_override("separation", 6)
@@ -3188,9 +3334,9 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	head_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head_row.add_child(head_spacer)
 	_trade_close_btn = Button.new()
-	_trade_close_btn.text = "✕ Close"
+	_trade_close_btn.text = "✕"
 	_trade_close_btn.tooltip_text = "Close this panel (Esc). Your offer stays open."
-	_trade_close_btn.custom_minimum_size = Vector2(70, 28)
+	_trade_close_btn.custom_minimum_size = Vector2(28, 28)
 	_trade_close_btn.add_theme_font_size_override("font_size", 12)
 	_style_button(_trade_close_btn, "ghost")
 	_trade_close_btn.pressed.connect(_close_trade_tray_by_user)
@@ -3538,7 +3684,17 @@ func _update_tray_min_height() -> void:
 		return
 	var nat := _trade_content.get_combined_minimum_size().y + 12.0
 	var avail := 99999.0
-	if _center_split != null and _center_split.size.y > 0.0:
+	var win_h: float = get_viewport().get_visible_rect().size.y
+	if win_h > 0.0:
+		var chrome := 98.0
+		if _hand_bar_panel != null and _hand_bar_panel.size.y > 0.0:
+			chrome = _hand_bar_panel.size.y
+		if _hand_bar_panel != null and _hand_bar_panel.get_parent() != null and _hand_bar_panel.get_parent().get_child_count() > 0:
+			var top: Node = _hand_bar_panel.get_parent().get_child(0)
+			if top is Control and (top as Control).size.y > 0.0:
+				chrome += (top as Control).size.y
+		avail = win_h - 480.0 - chrome - 6.0
+	elif _center_split != null and _center_split.size.y > 0.0:
 		avail = _center_split.size.y - 480.0
 	_trade_tray.custom_minimum_size.y = minf(nat, maxf(avail, 96.0))
 
@@ -3995,6 +4151,22 @@ func _on_counter_back_pressed() -> void:
 	_reset_trade_counts()
 	_refresh_trade_tray(session.state, session.get_acting_player_id(), _is_human_acting())
 
+func _hand_card_tooltip(state: GameState, res: int, hand_hidden: bool, held: int) -> String:
+	if hand_hidden:
+		return "Hand is hidden"
+	if state.phase == GameTypes.TurnPhase.TURN_DISCARD:
+		return "Click to pick a card to discard"
+	if not _is_human_acting():
+		return "Not your turn"
+	if state.phase == GameTypes.TurnPhase.TURN_ROLL:
+		return "Roll first"
+	if not state.open_trade.is_empty():
+		return "Reply to the open offer first"
+	if held <= 0:
+		return "No %s in hand" % GameTypes.resource_name(res)
+	return "Click to offer in a trade"
+
+
 func _on_resource_card_pressed(res: int) -> void:
 	if session == null or session.state == null:
 		return
@@ -4013,9 +4185,9 @@ func _on_resource_card_pressed(res: int) -> void:
 	if _trade_respond_mode:
 		return
 	if not _trade_tray.visible:
-		_trade_tray.visible = true
-		_trade_opened_auto = false
-		_trade_reopen_token = ""
+		_toggle_trade_tray()
+		if not _trade_tray.visible:
+			return
 	_adjust_trade_count(true, res, 1)
 
 func _cancel_current_pick() -> void:

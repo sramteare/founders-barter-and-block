@@ -447,9 +447,6 @@ func _draw() -> void:
 
 	# 13. Floating resource popups
 	for popup in _popups:
-		if popup.has("fly"):
-			_draw_resource_fly(popup, font, hex_radius)
-			continue
 		var p_age: float = popup["age"]
 		var p_dur: float = popup["duration"]
 		var p_t: float = clampf(p_age / p_dur, 0.0, 1.0)
@@ -1496,33 +1493,3 @@ func _draw_blocker_slide(topo: HexMath.BoardTopology, hex_radius: float, small_f
 		draw_circle(Vector2.ZERO, sh_w, sh_col)
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	_draw_blocker_icon(pos, hex_radius * scale_f, int(round(float(small_font_size) * scale_f)))
-
-func spawn_tile_resource_card_fly(tile_id: int, res: int) -> void:
-	if state == null or tile_id < 0 or tile_id >= HexMath.get_topology().tile_centers.size():
-		return
-	var topo := HexMath.get_topology()
-	var hex_radius := _get_hex_radius()
-	var from := _unit_to_screen(topo.tile_centers[tile_id], hex_radius)
-	_popups.append({
-		"fly": true,
-		"from": from,
-		"to": Vector2(lerpf(from.x, size.x * 0.5, 0.5), size.y + 40.0),
-		"res": res,
-		"age": 0.0,
-		"duration": maxf(0.25, 0.85 * anim_scale),
-	})
-
-func _draw_resource_fly(popup: Dictionary, font: Font, hex_radius: float) -> void:
-	var t := clampf(float(popup["age"]) / float(popup["duration"]), 0.0, 1.0)
-	var eased := t * t * (3.0 - 2.0 * t)
-	var pos: Vector2 = (popup["from"] as Vector2).lerp(popup["to"] as Vector2, eased)
-	var w := maxf(18.0, hex_radius * 0.34)
-	var card_r := Rect2(pos - Vector2(w, w * 1.4) * 0.5, Vector2(w, w * 1.4))
-	var alpha := 1.0 if t < 0.75 else clampf(1.0 - (t - 0.75) / 0.25, 0.0, 1.0)
-	var box := StyleBoxFlat.new()
-	box.bg_color = Color(0.97, 0.94, 0.86, alpha)
-	box.border_color = Color(Palette.INK, alpha)
-	box.set_border_width_all(1)
-	box.set_corner_radius_all(3)
-	draw_style_box(box, card_r)
-	CardFace.draw_emblem(self, "resource", int(popup["res"]), card_r.grow(-w * 0.16))

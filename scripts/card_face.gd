@@ -6,18 +6,84 @@ signal badge_pressed()
 
 const RATIO := 5.0 / 7.0
 const BADGE_COLOR := Color(0.68, 0.23, 0.16)
+const PILE_RESERVE := 48.0
 
-var kind := "resource"
-var resource := -1
-var action := -1
-var count := 0
-var badge := 0
-var selected := false
-var disabled := false
-var hidden_card := false
-var stack_depth := 0
+var kind := "resource":
+	set(v):
+		if kind == v:
+			return
+		kind = v
+		_mark_dirty()
+var resource := -1:
+	set(v):
+		if resource == v:
+			return
+		resource = v
+		_mark_dirty()
+var action := -1:
+	set(v):
+		if action == v:
+			return
+		action = v
+		_mark_dirty()
+var count := 0:
+	set(v):
+		if count == v:
+			return
+		count = v
+		_mark_dirty()
+var badge := 0:
+	set(v):
+		if badge == v:
+			return
+		badge = v
+		_mark_dirty()
+var selected := false:
+	set(v):
+		if selected == v:
+			return
+		selected = v
+		_mark_dirty()
+var disabled := false:
+	set(v):
+		if disabled == v:
+			return
+		disabled = v
+		_mark_dirty()
+var hidden_card := false:
+	set(v):
+		if hidden_card == v:
+			return
+		hidden_card = v
+		_mark_dirty()
+var stack_depth := 0:
+	set(v):
+		if stack_depth == v:
+			return
+		stack_depth = v
+		_mark_dirty()
 var focusable := true
 var count_badge := true
+var pile_low_tint := false:
+	set(v):
+		if pile_low_tint == v:
+			return
+		pile_low_tint = v
+		_mark_dirty()
+var redraw_requests := 0
+var pile_count := -1:
+	set(v):
+		if pile_count == v:
+			return
+		pile_count = v
+		if pile_count >= 0:
+			var w := maxf(custom_minimum_size.x, 1.0)
+			custom_minimum_size = Vector2(w, w / RATIO + PILE_RESERVE)
+		_mark_dirty()
+
+func _mark_dirty() -> void:
+	redraw_requests += 1
+	queue_redraw()
 
 var _hover := false
 var _press_inside := false
@@ -51,7 +117,10 @@ func _badge_rect() -> Rect2:
 func _card_rect() -> Rect2:
 	var lift := 6.0 if selected else (3.0 if _hover else 0.0)
 	var lt := 3.0 + float(stack_depth) * 1.8
-	return Rect2(Vector2(3.0, lt - lift), size - Vector2(6.0, lt + 3.0))
+	var h := size.y - lt - 3.0
+	if pile_count >= 0:
+		h = minf(h, (size.x - 6.0) / RATIO)
+	return Rect2(Vector2(3.0, lt - lift), Vector2(size.x - 6.0, h))
 
 func _draw() -> void:
 	if size.x <= 2.0 or size.y <= 2.0:
@@ -59,6 +128,9 @@ func _draw() -> void:
 	var dim := disabled or (count <= 0 and kind != "back")
 	var a := 0.55 if dim else 1.0
 	var cr := _card_rect()
+	if pile_count == 0:
+		_draw_pile_slot(cr)
+		return
 	if selected:
 		var glow := StyleBoxFlat.new()
 		glow.bg_color = Color(0.0, 0.0, 0.0, 0.0)
@@ -80,6 +152,7 @@ func _draw() -> void:
 		draw_style_box(ls, lr)
 	if hidden_card or kind == "back":
 		_draw_back(cr)
+		_draw_pile_edges(cr)
 		_draw_badges(cr)
 		return
 	var face := StyleBoxFlat.new()
@@ -110,7 +183,47 @@ func _draw() -> void:
 		_draw_name(font, cr, CardFace.action_name(action).to_upper(), Color(Palette.INK, a))
 	else:
 		_draw_name(font, cr, "CARD", Color(Palette.INK, a))
+	_draw_pile_edges(cr)
 	_draw_badges(cr)
+
+
+func _draw_pile_edges(cr: Rect2) -> void:
+	if pile_count <= 1:
+		return
+	var edge_col := Palette.ACCENT_RED.darkened(0.08) if pile_low_tint else Palette.INK_SOFT
+	var paper := Color(0.93, 0.90, 0.82, 0.95)
+	var last_i := pile_count - 1
+	for i in range(1, pile_count):
+		var y0 := cr.end.y + float(i - 1) * 2.0
+		if i == last_i:
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = paper
+			sb.border_color = edge_col
+			sb.set_border_width_all(1)
+			sb.border_width_top = 0
+			sb.corner_radius_bottom_left = 5
+			sb.corner_radius_bottom_right = 5
+			draw_style_box(sb, Rect2(Vector2(cr.position.x, y0 - 3.0), Vector2(cr.size.x, 5.0)))
+		else:
+			draw_rect(Rect2(Vector2(cr.position.x, y0), Vector2(cr.size.x, 2.0)), paper)
+			var ly := y0 + 1.5
+			draw_line(Vector2(cr.position.x, ly), Vector2(cr.end.x, ly), edge_col, 1.0)
+
+
+func _draw_pile_slot(cr: Rect2) -> void:
+	var col := Color(Palette.ACCENT_RED, 0.8) if pile_low_tint else Color(Palette.INK_SOFT, 0.55)
+	var dash := 4.0
+	var gap := 6.0
+	var x := cr.position.x
+	while x < cr.end.x - dash:
+		draw_line(Vector2(x, cr.position.y), Vector2(minf(x + dash, cr.end.x), cr.position.y), col, 1.0)
+		draw_line(Vector2(x, cr.end.y), Vector2(minf(x + dash, cr.end.x), cr.end.y), col, 1.0)
+		x += gap
+	var y := cr.position.y
+	while y < cr.end.y - dash:
+		draw_line(Vector2(cr.position.x, y), Vector2(cr.position.x, minf(y + dash, cr.end.y)), col, 1.0)
+		draw_line(Vector2(cr.end.x, y), Vector2(cr.end.x, minf(y + dash, cr.end.y)), col, 1.0)
+		y += gap
 
 func _draw_back(cr: Rect2) -> void:
 	var face := StyleBoxFlat.new()
