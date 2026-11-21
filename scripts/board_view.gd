@@ -46,6 +46,12 @@ var _pending_kind: String = ""
 var _pending_id: int = -1
 var _harbour_label_rects: Array[Rect2] = []
 var _port_badge_rects: Array[Rect2] = []
+var _fit_r := 0.0
+var _fit_size := Vector2.ZERO
+var _fit_off_y := 0.0
+var _fit_edges: Array = []
+var _fit_all_edges: Array = []
+var _fit_state_id := -1
 var _port_badge_data: Array[Dictionary] = []
 var _land_polys_screen: Array[PackedVector2Array] = []
 var _hovered_port: int = -1
@@ -79,7 +85,7 @@ const _CLOUD_DEFS: Array[Vector4] = [
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	custom_minimum_size = Vector2(520, 480)
+	custom_minimum_size = Vector2(320, 280)
 	mouse_default_cursor_shape = Control.CURSOR_ARROW
 	set_process(true)
 
@@ -227,19 +233,145 @@ func get_spot_screen_position(kind: String, id: int) -> Vector2:
 	return size * 0.5
 
 func _get_hex_radius() -> float:
-	var half_y: float = size.y * 0.5
-	var half_x: float = size.x * 0.5
-	# Island reaches ~4.48 units (harbour point + boat + gap + label pill + 12 px margin).
-	# Two linear bounds: one where the 26 px boat-minimum dominates, one where it scales with R.
-	var ry := minf((half_y - 39.0) / 4.92, (half_y - 49.0) / 4.48)
-	# Outward sea-side trade badge: circle + "2:1" tag reach ~5.7 units + 30 px.
-	var ry_badge := (half_y - 22.0) / 5.5
-	# East/west harbour label pill half-width (~58 px worst case) + 12 px margin.
-	var rx := (half_x - 70.0) / 5.06
-	return clampf(minf(minf(rx, ry), ry_badge), 24.0, 74.0)
+	var sid := state.get_instance_id() if state != null else -1
+	if size != _fit_size or sid != _fit_state_id:
+		_recompute_fit()
+	return _fit_r
+
+# Largest hex radius at which EVERY drawn feature (tiles, piers, boats, harbour
+# label pills, trade badges and their ratio tags — worst case one on every
+# coastal edge) fits inside the view with an 8 px margin. Also returns the
+# vertical offset that balances the leftover margin top and bottom.
+func _recompute_fit() -> void:
+	_fit_size = size
+	_fit_r = 24.0
+	_fit_off_y = 0.0
+	_fit_state_id = state.get_instance_id() if state != null else -1
+	var topo := HexMath.get_topology()
+	if _fit_all_edges.is_empty():
+		for e_id in topo.coastal_edges:
+			var ev: Vector2i = topo.edge_vertices[e_id]
+			var m: Vector2 = (topo.vertex_positions[ev.x] + topo.vertex_positions[ev.y]) * 0.5
+			var tc: Vector2 = topo.tile_centers[topo.edge_tiles[e_id][0]]
+			_fit_all_edges.append({"mid": m, "u": (m - tc).normalized(), "vx": ev.x, "vy": ev.y})
+	_fit_edges = _fit_all_edges.duplicate()
+	if state != null and state.vertex_ports.size() >= topo.vertex_positions.size():
+		var real: Array = []
+		for e in _fit_all_edges:
+			var pa: int = int(state.vertex_ports[int(e["vx"])])
+			var pb: int = int(state.vertex_ports[int(e["vy"])])
+			if pa != -2 and pa == pb:
+				real.append(e)
+		_fit_edges = real
+	if size.x < 20.0 or size.y < 20.0:
+		return
+	var r := 74.0
+	while r >= 16.0:
+		var res: Variant = _fit_ports_at(r)
+		if res != null:
+			_fit_r = r
+			_fit_off_y = float(res)
+			return
+		r -= 1.0
+	_fit_r = 16.0
+	_fit_off_y = 0.0
+
+# Simulates the real badge/tag placement (draw_port_labels) for the current
+# ports at radius r inside the 8 px margin. Returns the vertical offset that
+# balances the leftover space, or null when some port cannot be placed.
+func _fit_ports_at(r: float) -> Variant:
+	var topo := HexMath.get_topology()
+	if topo.vertex_positions.size() == 0:
+		return null
+	var tiles_min_y := INF
+	var tiles_max_y := -INF
+	var tiles_max_x := 0.0
+	for v in topo.vertex_positions:
+		var vp: Vector2 = v
+		tiles_min_y = minf(tiles_min_y, vp.y * r)
+		tiles_max_y = maxf(tiles_max_y, vp.y * r)
+		tiles_max_x = maxf(tiles_max_x, absf(vp.x) * r)
+	var k := maxf(r, 43.4)
+	var badge_d := maxf(24.0, r * 0.62)
+	var r_c := badge_d * 0.5
+	var tag_fs := maxf(11.0, badge_d * 0.30)
+	var tag_h := tag_fs + 5.0
+	var tag_w := 34.0
+	var min_y := tiles_min_y
+	var max_y := tiles_max_y
+	var max_x := tiles_max_x + 60.0
+	var boat_rects: Array[Rect2] = []
+	var edge_data: Array = []
+	for e in _fit_edges:
+		var mid: Vector2 = (e["mid"] as Vector2) * r
+		var u: Vector2 = e["u"]
+		var boat_c := mid + u * (r * 0.73)
+		var br := Rect2(boat_c + Vector2(-0.28 * k, -0.31 * k), Vector2(0.56 * k, 0.76 * k))
+		boat_rects.append(br)
+		edge_data.append({"mid": mid, "u": u})
+		min_y = minf(min_y, br.position.y - 28.0)
+		max_y = maxf(max_y, br.end.y + 28.0)
+		max_x = maxf(max_x, maxf(absf(br.position.x), absf(br.end.x)) + 60.0)
+	if max_y - min_y > size.y - 18.0 or max_x * 2.0 > size.x - 18.0:
+		return null
+	var lo := 9.0 - size.y * 0.5 - min_y
+	var hi := size.y * 0.5 - 9.0 - max_y
+	var off := (lo + hi) * 0.5
+	var bound := Rect2(
+		Vector2(9.0 - size.x * 0.5, 9.0 - size.y * 0.5 - off),
+		Vector2(size.x - 18.0, size.y - 18.0)
+	)
+	var land_polys: Array[PackedVector2Array] = []
+	for t_id in range(topo.tile_coords.size()):
+		var poly := PackedVector2Array()
+		for v_id in topo.tile_vertices[t_id]:
+			poly.append((topo.vertex_positions[v_id] as Vector2) * r)
+		land_polys.append(poly)
+	var placed: Array[Rect2] = []
+	for ed in edge_data:
+		var mid2: Vector2 = ed["mid"]
+		var u2: Vector2 = ed["u"]
+		var tangent2 := Vector2(-u2.y, u2.x)
+		var b_idx: int = edge_data.find(ed)
+		var boat_sup := _rect_support_along(boat_rects[b_idx], u2) - mid2.dot(u2)
+		var tag_gap := r_c + 3.0 + tag_h * 0.5
+		var sides: Array[Vector2] = [u2, tangent2, -tangent2]
+		var t0 := boat_sup + 6.0 + r_c
+		var ok := false
+		var ok_badge := Rect2()
+		var ok_tag := Rect2()
+		for slide in [0.0, 1.0, -1.0, 2.0, -2.0]:
+			var t := t0
+			var g := 0
+			while g < 90 and t < 480.0:
+				g += 1
+				var c: Vector2 = mid2 + u2 * t + tangent2 * (float(slide) * r_c)
+				var badge_rect := Rect2(c - Vector2(r_c, r_c), Vector2(badge_d, badge_d))
+				if not bound.encloses(badge_rect):
+					break
+				for side in sides:
+					var tc := c + side * tag_gap
+					var tag_rect := Rect2(tc - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
+					if not bound.encloses(tag_rect):
+						continue
+					if _badge_zone_clear(c, r_c, tag_rect, land_polys, boat_rects, placed):
+						ok = true
+						ok_badge = badge_rect
+						ok_tag = tag_rect
+						break
+				if ok:
+					break
+				t += 3.0
+			if ok:
+				break
+		if not ok:
+			return null
+		placed.append(ok_badge)
+		placed.append(ok_tag)
+	return off
 
 func _unit_to_screen(unit_pos: Vector2, hex_radius: float) -> Vector2:
-	return (size * 0.5) + unit_pos * hex_radius
+	return (size * 0.5) + Vector2(0.0, _fit_off_y) + unit_pos * hex_radius
 
 func _pick_radius_vertex(hex_radius: float) -> float:
 	return maxf(22.0, hex_radius * 0.45)
@@ -389,7 +521,7 @@ func _draw() -> void:
 
 		# 4. Blocker Icon
 		if state.blocker_tile == t_id and _blocker_t >= 1.0:
-			var b_offset: Vector2 = Vector2(hex_radius * 0.28, -hex_radius * 0.24) if num > 0 else Vector2.ZERO
+			var b_offset: Vector2 = Vector2(hex_radius * 0.02, -hex_radius * 0.06) if num > 0 else Vector2.ZERO
 			_draw_blocker_icon(t_center + b_offset, hex_radius, small_font_size)
 
 		# 5. Highlighted Tile Ring (for PICK_BLOCKER_TILE)
@@ -697,6 +829,7 @@ func token_layout(num: int, hex_radius: float, style: String) -> Dictionary:
 				sc = 0.8
 		disc_r *= sc
 		num_font = int(float(num_font) * sc)
+	num_font = maxi(11, num_font)
 	var pip_r := maxf(1.8, hex_radius * 0.032)
 	var num_str := str(num)
 	var font: Font = ThemeDB.fallback_font
@@ -704,6 +837,11 @@ func token_layout(num: int, hex_radius: float, style: String) -> Dictionary:
 	if font != null:
 		text_h = font.get_string_size(num_str, HORIZONTAL_ALIGNMENT_CENTER, -1, num_font).y
 	var num_offset := Vector2(0.0, text_h * 0.18)
+	# The chip always grows enough to carry the number legibly.
+	var text_w := float(num_font)
+	if font != null:
+		text_w = font.get_string_size(num_str, HORIZONTAL_ALIGNMENT_CENTER, -1, num_font).x
+	disc_r = maxf(disc_r, maxf(text_w * 0.5 + 2.5, float(num_font) * 0.62))
 	var s := hex_radius * 0.095
 	var row_y := disc_r * 0.55
 	if pips > 1:
@@ -720,8 +858,9 @@ func token_layout(num: int, hex_radius: float, style: String) -> Dictionary:
 		if pip_top < num_bottom + 1.5:
 			num_offset.y -= (num_bottom + 1.5) - pip_top
 	var out_pips: Array[Vector2] = []
-	for i in range(pips):
-		out_pips.append(Vector2(-float(pips - 1) * s * 0.5 + float(i) * s, row_y))
+	if hex_radius >= 26.0:
+		for i in range(pips):
+			out_pips.append(Vector2(-float(pips - 1) * s * 0.5 + float(i) * s, row_y))
 	return {"disc_r": disc_r, "num_font": num_font, "num_offset": num_offset, "pip_r": pip_r, "pips": out_pips}
 
 func _hex_poly(center: Vector2, r: float) -> PackedVector2Array:
@@ -1130,7 +1269,7 @@ func _draw_port_labels(topo: HexMath.BoardTopology, hex_radius: float, font: Fon
 	_land_polys_screen = land_polys
 	var placed: Array[Rect2] = []
 	var placed_badges: Array[Rect2] = []
-	var bound := Rect2(Vector2(2.0, 2.0), size - Vector2(4.0, 4.0))
+	var bound := Rect2(Vector2.ZERO, size).grow(-9.0)
 	var gap := 4.0
 	for spec in _port_specs:
 		var port_type: int = int(spec["port_type"])
@@ -1138,6 +1277,93 @@ func _draw_port_labels(topo: HexMath.BoardTopology, hex_radius: float, font: Fon
 		var tangent: Vector2 = spec["tangent"]
 		var boat_index: int = int(spec["boat_index"])
 		var boat_rect: Rect2 = _harbour_boat_rects[boat_index]
+		var pi: int = _port_specs.find(spec)
+		var badge_d := maxf(24.0, hex_radius * 0.62)
+		var r_c: float = badge_d * 0.5
+		var tag_fs := maxi(11, int(badge_d * 0.30))
+		var tag_txt := "3:1" if port_type == GameTypes.PortType.GENERIC_3_TO_1 else "2:1"
+		var tag_ts := font.get_string_size(tag_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, tag_fs)
+		var tag_w: float = tag_ts.x + 8.0
+		var tag_h: float = float(tag_fs) + 5.0
+		var mid: Vector2 = spec["mid"]
+		var u: Vector2 = spec["outward"]
+		var boat_sup: float = _rect_support_along(boat_rect, u) - mid.dot(u)
+		var tag_gap: float = r_c + 3.0 + tag_h * 0.5
+		var sides: Array[Vector2] = [u, tangent, -tangent]
+		var chosen_c := Vector2.INF
+		var chosen_tag := Rect2()
+		var t0 := boat_sup + 6.0 + r_c
+		# March outward; when the sea lane is crowded, slide along the coast
+		# tangent so neighbouring ports separate instead of stacking badges.
+		for slide in [0.0, 1.0, -1.0, 2.0, -2.0]:
+			var t := t0
+			var guard_n := 0
+			while guard_n < 90 and t < 480.0:
+				guard_n += 1
+				var c: Vector2 = mid + u * t + tangent * (float(slide) * r_c)
+				var badge_rect := Rect2(c - Vector2(r_c, r_c), Vector2(badge_d, badge_d))
+				if not bound.encloses(badge_rect):
+					break
+				for side in sides:
+					var tc := c + side * tag_gap
+					var tag_rect := Rect2(tc - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
+					if not bound.encloses(tag_rect):
+						continue
+					if _badge_zone_clear(c, r_c, tag_rect, land_polys, _harbour_boat_rects, placed_badges):
+						chosen_c = c
+						chosen_tag = tag_rect
+						break
+				if chosen_c != Vector2.INF:
+					break
+				t += 3.0
+			if chosen_c != Vector2.INF:
+				break
+		if chosen_c == Vector2.INF:
+			for slide2 in [0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0]:
+				var t2 := t0
+				var guard2 := 0
+				while guard2 < 90 and t2 < 480.0:
+					guard2 += 1
+					var c2: Vector2 = mid + u * t2 + tangent * (float(slide2) * r_c)
+					var badge2 := Rect2(c2 - Vector2(r_c, r_c), Vector2(badge_d, badge_d))
+					if not bound.encloses(badge2):
+						break
+					for side2 in sides:
+						var tc2 := c2 + side2 * tag_gap
+						var tag2 := Rect2(tc2 - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
+						if not bound.encloses(tag2):
+							continue
+						var clash := false
+						for pr in placed_badges:
+							if tag2.grow(2.0).intersects(pr) or _rect_circle_overlap(pr, c2, r_c + 2.0):
+								clash = true
+								break
+						if not clash:
+							chosen_c = c2
+							chosen_tag = tag2
+							break
+					if chosen_c != Vector2.INF:
+						break
+					t2 += 3.0
+				if chosen_c != Vector2.INF:
+					break
+		if chosen_c == Vector2.INF:
+			var c3 := mid + u * (boat_sup + 6.0 + r_c)
+			c3.x = clampf(c3.x, bound.position.x + r_c, bound.end.x - r_c)
+			c3.y = clampf(c3.y, bound.position.y + r_c, bound.end.y - r_c)
+			chosen_c = c3
+			var tc3 := c3 + u * tag_gap
+			chosen_tag = _clamp_rect(Rect2(tc3 - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h)), bound)
+		placed_badges.append(Rect2(chosen_c - Vector2(r_c, r_c), Vector2(badge_d, badge_d)))
+		placed_badges.append(chosen_tag)
+		_port_badge_rects.append(Rect2(chosen_c - Vector2(r_c, r_c), Vector2(badge_d, badge_d)))
+		_port_badge_data.append({
+			"center": chosen_c,
+			"r": r_c,
+			"tag_rect": chosen_tag,
+			"boat_rect": boat_rect,
+		})
+		_draw_port_badge(chosen_c, badge_d, port_type, chosen_tag, tag_txt, tag_fs)
 		var fs := maxi(11, int(clampf(hex_radius * 0.21, 11.0, 14.0)))
 		var lbl := _port_label(port_type)
 		var text_ts := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
@@ -1162,9 +1388,12 @@ func _draw_port_labels(topo: HexMath.BoardTopology, hex_radius: float, font: Fon
 		cands.append(second - tangent * pill.x * 0.6)
 		var chosen := Rect2()
 		var found := false
+		var pill_avoid: Array[Rect2] = []
+		pill_avoid.append_array(placed)
+		pill_avoid.append_array(placed_badges)
 		for c in cands:
 			var rect := _clamp_rect(Rect2(c - pill * 0.5, pill), bound)
-			if _label_hits(rect, land_polys, placed):
+			if _label_hits(rect, land_polys, pill_avoid):
 				continue
 			chosen = rect
 			found = true
@@ -1173,61 +1402,9 @@ func _draw_port_labels(topo: HexMath.BoardTopology, hex_radius: float, font: Fon
 			chosen = _clamp_rect(Rect2(first - pill * 0.5, pill), bound)
 		placed.append(chosen)
 		_harbour_label_rects.append(chosen)
-		var pi: int = _port_specs.find(spec)
-		var badge_d := maxf(24.0, hex_radius * 0.62)
-		var r_c: float = badge_d * 0.5
-		var tag_fs := maxi(11, int(badge_d * 0.30))
-		var tag_txt := "3:1" if port_type == GameTypes.PortType.GENERIC_3_TO_1 else "2:1"
-		var tag_ts := font.get_string_size(tag_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, tag_fs)
-		var tag_w: float = tag_ts.x + 8.0
-		var tag_h: float = float(tag_fs) + 5.0
-		var mid: Vector2 = spec["mid"]
-		var u: Vector2 = spec["outward"]
-		var boat_sup: float = _rect_support_along(boat_rect, u) - mid.dot(u)
-		var tag_gap: float = r_c + 3.0 + tag_h * 0.5
-		var chosen_c := Vector2.INF
-		var chosen_tag := Rect2()
-		var t := boat_sup + 6.0 + r_c
-		while t < 480.0:
-			var c := mid + u * t
-			var badge_rect := Rect2(c - Vector2(r_c, r_c), Vector2(badge_d, badge_d))
-			var tc := c + u * tag_gap
-			var tag_rect := Rect2(tc - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
-			if not bound.encloses(badge_rect) or not bound.encloses(tag_rect):
-				break
-			if _badge_zone_clear(c, r_c, tag_rect, land_polys, _harbour_boat_rects, placed_badges):
-				chosen_c = c
-				chosen_tag = tag_rect
-				break
-			t += 3.0
-		if chosen_c == Vector2.INF:
-			var last_c := mid + u * (boat_sup + 6.0 + r_c)
-			var last_tag := Rect2(last_c + u * tag_gap - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
-			var tt := boat_sup + 6.0 + r_c
-			while tt < 480.0:
-				var c2 := mid + u * tt
-				var badge_rect2 := Rect2(c2 - Vector2(r_c, r_c), Vector2(badge_d, badge_d))
-				var tc2 := c2 + u * tag_gap
-				var tag_rect2 := Rect2(tc2 - Vector2(tag_w, tag_h) * 0.5, Vector2(tag_w, tag_h))
-				if not bound.encloses(badge_rect2) or not bound.encloses(tag_rect2):
-					break
-				last_c = c2
-				last_tag = tag_rect2
-				tt += 3.0
-			chosen_c = last_c
-			chosen_tag = last_tag
-		placed_badges.append(Rect2(chosen_c - Vector2(r_c, r_c), Vector2(badge_d, badge_d)))
-		placed_badges.append(chosen_tag)
-		_port_badge_rects.append(Rect2(chosen_c - Vector2(r_c, r_c), Vector2(badge_d, badge_d)))
-		_port_badge_data.append({
-			"center": chosen_c,
-			"r": r_c,
-			"tag_rect": chosen_tag,
-			"boat_rect": boat_rect,
-		})
 		if _hovered_port == pi or show_port_names:
 			_draw_port_label_pill(chosen, font, fs, port_type)
-		_draw_port_badge(chosen_c, badge_d, port_type, chosen_tag, tag_txt, tag_fs)
+
 
 func _label_hits(rect: Rect2, land_polys: Array[PackedVector2Array], placed: Array[Rect2]) -> bool:
 	var rect_poly := PackedVector2Array([
@@ -1678,6 +1855,15 @@ func get_land_polys() -> Array[PackedVector2Array]:
 func get_port_badge_data() -> Array[Dictionary]:
 	return _port_badge_data
 
+func port_tag_rects() -> Array[Rect2]:
+	var out: Array[Rect2] = []
+	for d in _port_badge_data:
+		out.append(d["tag_rect"])
+	return out
+
+func port_badge_rects() -> Array[Rect2]:
+	return _port_badge_rects.duplicate()
+
 
 func _draw_port_badge(center: Vector2, d: float, port_type: int, tag_rect: Rect2, tag_txt: String, tag_fs: int) -> void:
 	var r := d * 0.5
@@ -1708,26 +1894,107 @@ func port_name_visible_for(idx: int) -> bool:
 func _sstr(font: Font, pos: Vector2, text: String, alignment: int = HORIZONTAL_ALIGNMENT_LEFT, width: float = -1.0, font_size: int = 16, modulate: Color = Color(1, 1, 1, 1)) -> void:
 	draw_string(font, Vector2(snappedf(pos.x, 1.0), snappedf(pos.y, 1.0)), text, alignment, width, font_size, modulate)
 
-func _draw_blocker_icon(center: Vector2, hex_radius: float, small_font_size: int) -> void:
-	var br := hex_radius * 0.26
-	var shield := PackedVector2Array([
-		center + Vector2(0, -br),
-		center + Vector2(br * 0.85, -br * 0.45),
-		center + Vector2(br * 0.65, br * 0.45),
-		center + Vector2(0, br),
-		center + Vector2(-br * 0.65, br * 0.45),
-		center + Vector2(-br * 0.85, -br * 0.45),
+func _draw_blocker_icon(center: Vector2, hex_radius: float, _small_font_size: int) -> void:
+	# A hooded highwayman standing 1.25 chip-diameters tall: flared bell cloak,
+	# pointed cowl with warm eyes, tan road sack, wooden base.
+	var u := hex_radius
+	var ink := Palette.INK
+	var lw := clampf(u * 0.045, 1.4, 2.6)
+	var cloak := Color(0.255, 0.24, 0.36)
+	var cloak_lit := Color(0.37, 0.35, 0.5)
+	var cloak_dark := Color(0.18, 0.17, 0.28)
+	var hood := Color(0.29, 0.275, 0.41)
+	var face := Color(0.085, 0.075, 0.13)
+	var eye := Color(0.98, 0.83, 0.45)
+	var sack := Color(0.78, 0.64, 0.42)
+	var strap := Color(0.42, 0.31, 0.2)
+	var wood := Color(0.55, 0.42, 0.28)
+	var wood_lit := Color(0.66, 0.52, 0.36)
+	var rim := Color(0.32, 0.24, 0.15)
+	# ground shadow
+	draw_colored_polygon(_ellipse_poly(center + Vector2(0, u * 0.305), u * 0.235, u * 0.07, 14), Color(0.05, 0.04, 0.03, 0.12))
+	# round wooden base
+	draw_colored_polygon(_ellipse_poly(center + Vector2(0, u * 0.255), u * 0.21, u * 0.08, 16), wood)
+	draw_colored_polygon(_ellipse_poly(center + Vector2(0, u * 0.24), u * 0.165, u * 0.05, 14), wood_lit)
+	var base_rim := _ellipse_poly(center + Vector2(0, u * 0.255), u * 0.21, u * 0.08, 16)
+	base_rim.append(base_rim[0])
+	draw_polyline(base_rim, rim, lw * 0.8, true)
+	# bell cloak: narrow shoulders flaring to a wide hem
+	var bell := PackedVector2Array([
+		center + Vector2(-0.13 * u, -0.24 * u),
+		center + Vector2(-0.185 * u, -0.10 * u),
+		center + Vector2(-0.24 * u, 0.06 * u),
+		center + Vector2(-0.3 * u, 0.24 * u),
+		center + Vector2(0, 0.27 * u),
+		center + Vector2(0.3 * u, 0.24 * u),
+		center + Vector2(0.24 * u, 0.06 * u),
+		center + Vector2(0.185 * u, -0.10 * u),
+		center + Vector2(0.13 * u, -0.24 * u),
+		center + Vector2(0, -0.26 * u),
 	])
-	draw_colored_polygon(shield, Palette.BLOCKER)
-	var shield_outline := shield.duplicate()
-	shield_outline.append(shield[0])
-	draw_polyline(shield_outline, Palette.INK, 2.2, true)
-	var font := ThemeDB.fallback_font
-	if font == null:
-		return
-	var b_txt := "B"
-	var bt_size := font.get_string_size(b_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, small_font_size)
-	_sstr(font, center + Vector2(-bt_size.x * 0.5, bt_size.y * 0.28), b_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, small_font_size, Palette.PAPER)
+	draw_colored_polygon(bell, cloak)
+	if u >= 32.0:
+		# warm light down the left edge, shade on the right
+		var lit := PackedVector2Array([
+			center + Vector2(-0.122 * u, -0.225 * u),
+			center + Vector2(-0.172 * u, -0.095 * u),
+			center + Vector2(-0.226 * u, 0.065 * u),
+			center + Vector2(-0.284 * u, 0.235 * u),
+			center + Vector2(-0.244 * u, 0.24 * u),
+			center + Vector2(-0.19 * u, 0.07 * u),
+			center + Vector2(-0.136 * u, -0.09 * u),
+			center + Vector2(-0.092 * u, -0.21 * u),
+		])
+		draw_colored_polygon(lit, cloak_lit)
+		var dark := PackedVector2Array([
+			center + Vector2(0.122 * u, -0.225 * u),
+			center + Vector2(0.172 * u, -0.095 * u),
+			center + Vector2(0.226 * u, 0.065 * u),
+			center + Vector2(0.284 * u, 0.235 * u),
+			center + Vector2(0.244 * u, 0.24 * u),
+			center + Vector2(0.19 * u, 0.07 * u),
+			center + Vector2(0.136 * u, -0.09 * u),
+			center + Vector2(0.092 * u, -0.21 * u),
+		])
+		draw_colored_polygon(dark, cloak_dark)
+	# strap over the shoulder to the sack
+	draw_line(center + Vector2(-0.09 * u, -0.21 * u), center + Vector2(0.235 * u, -0.05 * u), strap, maxf(1.4, u * 0.03), true)
+	# tan road sack, clearly outside the cloak silhouette
+	draw_circle(center + Vector2(0.255 * u, -0.005 * u), u * 0.105, sack)
+	draw_circle(center + Vector2(0.255 * u, -0.045 * u), u * 0.035, sack.lightened(0.12))
+	draw_circle(center + Vector2(0.255 * u, -0.105 * u), u * 0.028, strap)
+	if u >= 28.0:
+		var sack_ring := _ellipse_poly(center + Vector2(0.255 * u, -0.005 * u), u * 0.105, u * 0.105, 14)
+		sack_ring.append(sack_ring[0])
+		draw_polyline(sack_ring, ink.darkened(0.1), lw * 0.7, true)
+	# pointed hood with a cowl tip flaring right
+	var hood_c := center + Vector2(0, -0.305 * u)
+	var tip := PackedVector2Array([
+		hood_c + Vector2(0.03 * u, -0.105 * u),
+		hood_c + Vector2(0.115 * u, -0.215 * u),
+		hood_c + Vector2(0.13 * u, -0.04 * u),
+	])
+	draw_colored_polygon(tip, hood)
+	draw_circle(hood_c, u * 0.135, hood)
+	draw_circle(hood_c + Vector2(0, u * 0.005), u * 0.085, face)
+	if u < 56.0:
+		draw_line(hood_c + Vector2(-0.03 * u, 0), hood_c + Vector2(0.03 * u, 0), Color(eye, 0.9), maxf(1.0, u * 0.022), true)
+	else:
+		var eye_r: float = maxf(1.1, u * 0.017)
+		draw_circle(hood_c + Vector2(-0.034 * u, -0.004 * u), eye_r * 2.0, Color(eye, 0.3))
+		draw_circle(hood_c + Vector2(0.034 * u, -0.004 * u), eye_r * 2.0, Color(eye, 0.3))
+		draw_circle(hood_c + Vector2(-0.034 * u, -0.004 * u), eye_r, eye)
+		draw_circle(hood_c + Vector2(0.034 * u, -0.004 * u), eye_r, eye)
+	# ink outlines: cloak, hood, tip
+	var bell_line := bell.duplicate()
+	bell_line.append(bell[0])
+	draw_polyline(bell_line, ink, lw, true)
+	var hood_ring := _ellipse_poly(hood_c, u * 0.135, u * 0.135, 14)
+	hood_ring.append(hood_ring[0])
+	draw_polyline(hood_ring, ink, lw * 0.8, true)
+	var tip_line := tip.duplicate()
+	tip_line.append(tip[0])
+	draw_polyline(tip_line, ink, lw * 0.8, true)
 
 func animate_build_vertex(v_id: int, col: Color) -> void:
 	if state == null or v_id < 0 or v_id >= HexMath.get_topology().vertex_positions.size():

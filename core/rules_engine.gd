@@ -224,21 +224,22 @@ static func _handle_setup_road(state: GameState, player_id: int, action: Diction
 	events.append("%s placed a starting road on edge %d." % [p["name"], e_id])
 	_recompute_longest_route(state, events)
 
+	var rel := (state.current_player - state.start_player + state.num_players) % state.num_players
 	if state.phase == GameTypes.TurnPhase.SETUP_ROAD_1:
-		if state.current_player < state.num_players - 1:
-			state.current_player += 1
+		if rel < state.num_players - 1:
+			state.current_player = (state.current_player + 1) % state.num_players
 			state.phase = GameTypes.TurnPhase.SETUP_SETTLEMENT_1
 		else:
 			state.phase = GameTypes.TurnPhase.SETUP_SETTLEMENT_2
 	else:
-		if state.current_player > 0:
-			state.current_player -= 1
+		if rel > 0:
+			state.current_player = (state.current_player - 1 + state.num_players) % state.num_players
 			state.phase = GameTypes.TurnPhase.SETUP_SETTLEMENT_2
 		else:
-			state.current_player = 0
+			state.current_player = state.start_player
 			state.turn_number = 1
 			state.phase = GameTypes.TurnPhase.TURN_ROLL
-			events.append("Setup complete! %s begins Turn 1." % state.players[0]["name"])
+			events.append("Setup complete! %s begins Turn 1." % state.players[state.start_player]["name"])
 
 	return _ok(events)
 
@@ -811,6 +812,12 @@ static func can_play_dev_card(state: GameState, player_id: int, card_type: int) 
 			return {"ok": false, "reason": "No road can be placed."}
 	return {"ok": true, "reason": ""}
 
+static func _record_played_dev(p: Dictionary, card_type: int) -> void:
+	if not p.has("played_dev"):
+		p["played_dev"] = {}
+	var pd: Dictionary = p["played_dev"]
+	pd[card_type] = int(pd.get(card_type, 0)) + 1
+
 static func _handle_play_guard(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
 	var check := can_play_dev_card(state, player_id, GameTypes.DevCardType.GUARD)
 	if not bool(check["ok"]):
@@ -826,6 +833,7 @@ static func _handle_play_guard(state: GameState, player_id: int, action: Diction
 	dev_cards.remove_at(idx)
 	p["played_dev_this_turn"] = true
 	p["played_guards"] = int(p["played_guards"]) + 1
+	_record_played_dev(p, GameTypes.DevCardType.GUARD)
 	events.append("%s played a Guard (total played: %d)." % [p["name"], int(p["played_guards"])])
 
 	_recompute_largest_guard(state, events)
@@ -842,6 +850,7 @@ static func _handle_play_road_work(state: GameState, player_id: int, events: Arr
 
 	dev_cards.remove_at(idx)
 	p["played_dev_this_turn"] = true
+	_record_played_dev(p, GameTypes.DevCardType.ROAD_WORK)
 	events.append("%s played Road Work!" % p["name"])
 
 	var max_free := mini(2, int(p["roads_left"]))
@@ -872,6 +881,7 @@ static func _handle_play_harvest_bounty(state: GameState, player_id: int, action
 
 	dev_cards.remove_at(idx)
 	p["played_dev_this_turn"] = true
+	_record_played_dev(p, GameTypes.DevCardType.HARVEST_BOUNTY)
 	p["hand"][res1] = int(p["hand"].get(res1, 0)) + 1
 	state.bank[res1] = int(state.bank.get(res1, 0)) - 1
 	p["hand"][res2] = int(p["hand"].get(res2, 0)) + 1
@@ -895,6 +905,7 @@ static func _handle_play_trade_decree(state: GameState, player_id: int, action: 
 
 	dev_cards.remove_at(idx)
 	p["played_dev_this_turn"] = true
+	_record_played_dev(p, GameTypes.DevCardType.TRADE_DECREE)
 
 	var total_taken := 0
 	for opp_id in range(state.num_players):
@@ -926,7 +937,7 @@ static func _handle_end_turn(state: GameState, player_id: int, events: Array[Str
 	state.open_trades_this_turn = 0
 	state.road_work_remaining = 0
 	state.current_player = (state.current_player + 1) % state.num_players
-	if state.current_player == 0:
+	if state.current_player == state.start_player:
 		state.turn_number += 1
 	state.phase = GameTypes.TurnPhase.TURN_ROLL
 	events.append("%s ended turn. Now %s's turn (Turn %d)." % [
