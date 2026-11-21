@@ -7,6 +7,7 @@ var seed_val: int = 0
 var num_players: int = 4
 var phase: int = GameTypes.TurnPhase.SETUP_SETTLEMENT_1
 var current_player: int = 0
+var start_player: int = 0
 var turn_number: int = 1
 var winner: int = -1
 
@@ -43,6 +44,7 @@ static func create_new_game(seed_val_in: int, num_players_in: int = 4, balanced:
 	gs.num_players = clampi(num_players_in, 2, 4)
 	gs.phase = GameTypes.TurnPhase.SETUP_SETTLEMENT_1
 	gs.current_player = 0
+	gs.start_player = 0
 	gs.turn_number = 1
 	gs.winner = -1
 	gs.setup_anchor_vertex = -1
@@ -55,6 +57,11 @@ static func create_new_game(seed_val_in: int, num_players_in: int = 4, balanced:
 	gs.tile_numbers = board["tile_numbers"]
 	gs.blocker_tile = board["blocker_tile"]
 	gs.vertex_ports = board["vertex_ports"]
+
+	# The start player is drawn from the game RNG AFTER the board was generated,
+	# so boards for a given seed never change.
+	gs.start_player = gs.rng.randi_range(0, gs.num_players - 1)
+	gs.current_player = gs.start_player
 
 	gs.vertex_owner = []
 	gs.vertex_owner.resize(54)
@@ -84,6 +91,7 @@ static func create_new_game(seed_val_in: int, num_players_in: int = 4, balanced:
 			"dev_cards": dev_cards_arr,
 			"new_dev_cards": new_dev_cards_arr,
 			"played_guards": 0,
+			"played_dev": {},
 			"played_dev_this_turn": false,
 			"settlements_left": 5,
 			"cities_left": 4,
@@ -203,6 +211,7 @@ func clone() -> GameState:
 	copy.num_players = num_players
 	copy.phase = phase
 	copy.current_player = current_player
+	copy.start_player = start_player
 	copy.turn_number = turn_number
 	copy.winner = winner
 	copy.setup_anchor_vertex = setup_anchor_vertex
@@ -229,6 +238,7 @@ func clone() -> GameState:
 			"dev_cards": dev_copy,
 			"new_dev_cards": new_dev_copy,
 			"played_guards": p["played_guards"],
+			"played_dev": (p.get("played_dev", {}) as Dictionary).duplicate(),
 			"played_dev_this_turn": p["played_dev_this_turn"],
 			"settlements_left": p["settlements_left"],
 			"cities_left": p["cities_left"],

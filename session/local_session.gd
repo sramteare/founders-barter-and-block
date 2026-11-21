@@ -11,7 +11,7 @@ var _ai_steps_in_turn: int = 0
 var _last_tracked_turn: int = -1
 var _last_tracked_player: int = -1
 
-func start_match(seed_val: int, seat_configs: Array[SeatConfig], balanced: bool = true) -> void:
+func start_match(seed_val: int, seat_configs: Array[SeatConfig], balanced: bool = true, forced_start_player: int = -1) -> void:
 	seats.clear()
 	if seat_configs.is_empty():
 		seats.append(SeatConfig.new(0, SeatConfig.SeatType.HUMAN, GameTypes.PLAYER_NAMES[0]))
@@ -23,6 +23,9 @@ func start_match(seed_val: int, seat_configs: Array[SeatConfig], balanced: bool 
 
 	var num_p: int = clampi(seats.size(), 2, 4)
 	state = GameState.create_new_game(seed_val, num_p, balanced)
+	if forced_start_player >= 0:
+		state.start_player = forced_start_player % num_p
+		state.current_player = state.start_player
 	for i in range(min(seats.size(), state.players.size())):
 		if not seats[i].display_name.is_empty():
 			state.players[i]["name"] = seats[i].display_name
