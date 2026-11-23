@@ -5487,15 +5487,6 @@ func _trade_side_total(counts: Dictionary) -> int:
 		total += int(counts.get(r, 0))
 	return total
 
-func _trade_side_resource(counts: Dictionary) -> int:
-	var found := -1
-	for r in GameTypes.ALL_RESOURCES:
-		if int(counts.get(r, 0)) > 0:
-			if found != -1:
-				return -2
-			found = r
-	return found
-
 func _ot_token(ot: Dictionary) -> String:
 	if ot.is_empty():
 		return ""
@@ -6168,9 +6159,16 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 		_trade_ask_btn.tooltip_text = "Post this offer to every other player"
 	_trade_ratio_btn.visible = propose_idle and unlocked and not _bank_selection_check(state, my_pid).is_empty()
 	if _trade_ratio_btn.visible:
-		var ratio_res := _trade_side_resource(_trade_give_counts)
-		var ratio_v := state.get_trade_ratio(my_pid, ratio_res)
-		_trade_ratio_btn.text = "Port 2:1" if ratio_v == 2 else ("Port 3:1" if ratio_v == 3 else "Bank 4:1")
+		var plan_ratios: Array[int] = []
+		for r in GameTypes.ALL_RESOURCES:
+			if int(_trade_give_counts.get(r, 0)) > 0:
+				var rv := state.get_trade_ratio(my_pid, r)
+				if not plan_ratios.has(rv):
+					plan_ratios.append(rv)
+		if plan_ratios.size() == 1:
+			_trade_ratio_btn.text = "Port 2:1" if plan_ratios[0] == 2 else ("Port 3:1" if plan_ratios[0] == 3 else "Bank 4:1")
+		else:
+			_trade_ratio_btn.text = "Bank / Port"
 	_trade_resend_btn.visible = editing_own_offer and not own_has_answer
 	if editing_own_offer:
 		var ot_key := "%s>%s" % [
@@ -6941,16 +6939,39 @@ func _make_card_trade_button(tip: String) -> Button:
 	return b
 
 func _bank_selection_check(state: GameState, pid: int) -> Dictionary:
-	var g_res := _trade_side_resource(_trade_give_counts)
-	var t_res := _trade_side_resource(_trade_get_counts)
-	if g_res < 0 or t_res < 0:
+	var units := 0
+	var give_total := 0
+	for r in GameTypes.ALL_RESOURCES:
+		var c := int(_trade_give_counts.get(r, 0))
+		if c <= 0:
+			continue
+		var ratio := state.get_trade_ratio(pid, r)
+		if c % ratio != 0:
+			return {}
+		units += int(c / ratio)
+		give_total += c
+	if give_total <= 0:
 		return {}
-	var g_cnt := int(_trade_give_counts.get(g_res, 0))
-	var t_cnt := int(_trade_get_counts.get(t_res, 0))
-	var ratio := state.get_trade_ratio(pid, g_res)
-	if g_cnt != ratio * t_cnt:
+	for r in GameTypes.ALL_RESOURCES:
+		if int(_trade_give_counts.get(r, 0)) > 0 and int(_trade_get_counts.get(r, 0)) > 0:
+			return {}
+		units -= int(_trade_get_counts.get(r, 0))
+	if units != 0:
 		return {}
-	return {"give_res": g_res, "get_res": t_res, "give_count": g_cnt, "get_count": t_cnt}
+	var pool: Array[int] = []
+	for r in GameTypes.ALL_RESOURCES:
+		var c := int(_trade_give_counts.get(r, 0))
+		if c <= 0:
+			continue
+		for u in range(int(c / state.get_trade_ratio(pid, r))):
+			pool.append(r)
+	var swaps: Array[Dictionary] = []
+	var idx := 0
+	for r in GameTypes.ALL_RESOURCES:
+		for u in range(int(_trade_get_counts.get(r, 0))):
+			swaps.append({"give_res": pool[idx], "get_res": r})
+			idx += 1
+	return {"swaps": swaps}
 
 func _on_ask_players_pressed() -> void:
 	if session == null or session.state == null:
@@ -6986,12 +7007,20 @@ func _on_clear_trade_pressed() -> void:
 func _on_bank_trade_pressed() -> void:
 	if session == null or session.state == null:
 		return
-	var sel := _bank_selection_check(session.state, _trade_dash_pid())
+	var pid := _trade_dash_pid()
+	var sel := _bank_selection_check(session.state, pid)
 	if sel.is_empty():
 		return
-	var times := int(sel.get("get_count", 0))
-	for i in range(times):
-		_submit_human_action(GameAction.maritime_trade(int(sel.get("give_res", -1)), int(sel.get("get_res", -1))))
+	for s in (sel.get("swaps", []) as Array):
+		var g := int((s as Dictionary).get("give_res", -1))
+		var t := int((s as Dictionary).get("get_res", -1))
+		var hand_before := int(session.state.players[pid]["hand"].get(g, 0))
+		var bank_before := int(session.state.bank.get(t, 0))
+		_submit_human_action(GameAction.maritime_trade(g, t))
+		if session.state == null:
+			break
+		if int(session.state.players[pid]["hand"].get(g, 0)) == hand_before and int(session.state.bank.get(t, 0)) == bank_before:
+			break
 	_reset_trade_counts()
 
 func _on_accept_offer_pressed() -> void:
