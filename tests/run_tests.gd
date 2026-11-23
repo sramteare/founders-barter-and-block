@@ -285,13 +285,14 @@ var _run_list: bool = false
 var _run_shard: int = -1
 var _run_shards: int = 0
 var _run_shard_load: Array[float] = []
+var _run_preassigned: Dictionary = {}
 var _run_filtered: bool = false
 var _run_abort: bool = false
 var _run_sections: Dictionary = {}
 
 # Seconds each slower test takes in a full single-process run (measured, rounded up).
-# --skip-slow leaves these out; --shard uses them to balance the shards. Every test
-# not listed counts as 0.2 s.
+# --skip-slow leaves these out; shard balancing uses SHARD_WEIGHT_SECONDS below.
+# Every test not listed counts as 0.2 s for balancing.
 const SLOW_TEST_SECONDS := {
 	"_test_layout_rect_lock_body": 4,  # 95
 	"_test_steal_flight_real_body": 4,  # 96
@@ -308,6 +309,87 @@ const SLOW_TEST_SECONDS := {
 	"_test_style_leftover_scan_body": 11,  # leftover scan (no number)
 	"_test_style_contrast_body": 9,  # 133
 }
+
+# Seconds per test used ONLY to balance the shards (--shard); it does NOT affect
+# --skip-slow (that still reads SLOW_TEST_SECONDS above). Holds every test that
+# takes >= 1.0 s in a full single-process run, measured seconds to 0.1.
+# Refresh: run the whole suite single-process,
+#   XDG_DATA_HOME=/tmp/opencode/p44/xdg timeout 900 ~/.local/bin/godot4 \
+#     --headless --path . --script tests/run_tests.gd > single.log 2>&1
+# and rebuild the entries from the "[PASS] ... [N.Ns, K checks]" lines (one run
+# varies a few tenths; rerun and average if a value looks off by more than that).
+const SHARD_WEIGHT_SECONDS := {
+	"_test_p43_hand_flight_body": 49.2,  # 148
+	"_test_p42_transparent_animations_body": 22.1,  # 147
+	"_test_style_leftover_scan_body": 22.1,  # no number
+	"_test_style_contrast_body": 21.1,  # 133
+	"_test_style_layout_lock_body": 17.7,  # 132
+	"_test_sea_behind_top_bar_body": 8.6,  # 146
+	"_test_saved_replays_body": 7.7,  # 114
+	"_test_live_trade_pacing_body": 5.8,  # 104
+	"_test_controls_batch_c_body": 5.5,  # 143
+	"_test_review_mode_body": 4.6,  # 113
+	"_test_island_top_bar_body": 4.6,  # 140
+	"_test_log_stays_placed_body": 4.0,  # 136
+	"_test_layout_rect_lock_body": 3.8,  # 95
+	"_test_steal_flight_real_body": 3.6,  # 96
+	"_test_fps_cap_body": 3.3,  # 110
+	"_test_count_badge_remove_body": 2.9,  # 126
+	"_test_board_style_rebake_body": 2.9,  # 130
+	"_test_fine_line_chrome_body": 2.7,  # 138
+	"_test_style_switcher_button_body": 2.5,  # 131
+	"_test_raised_card_shape_body": 2.5,  # 145
+	"_test_toast_tint_remap_body": 2.3,  # 134
+	"_test_art_batch_b_body": 2.2,  # 142
+	"_test_ui_style_setting_body": 2.1,  # 129
+	"_test_award_glyph_highlight_body": 2.1,  # 135
+	"_test_rev_anim_timing_body": 2.0,  # 123
+	"_test_audit_contrast_batch_a_body": 2.0,  # 141
+	"_test_dead_offer_autowithdraw_body": 1.9,  # 97
+	"_test_clear_button_states_body": 1.9,  # 100
+	"_test_fresh_trade_after_no_takers_body": 1.8,  # 99
+	"_test_toast_tween_body": 1.2,  # 47
+	"_test_replay_engine": 1.1,  # 112
+	"_test_sidebar_no_vscroll_body": 1.0,  # 120
+}
+
+func _runner_ui_test_bodies() -> Dictionary:
+	var bodies := {}
+	for line in FileAccess.get_file_as_string((get_script() as Script).resource_path).split("\n"):
+		var m := RegEx.create_from_string("],\\s*(\\w+)\\)\\s*$").search(line)
+		if m != null:
+			bodies[m.get_string(1)] = true
+	return bodies
+
+func _runner_preassign_shards() -> void:
+	# Weighted UI tests get their shard decided here, once, in weight order
+	# (descending, ties by method name) so the order sections happen to be
+	# registered in cannot skew a shard. Non-weighted tests keep the
+	# least-loaded rule in _runner_wants, starting from these loads; non-UI
+	# tests are not preassigned (is_ui is only known at registration) and stay
+	# on shard 0 as before.
+	var entries: Array = []
+	var bodies := _runner_ui_test_bodies()
+	for method in SHARD_WEIGHT_SECONDS:
+		if bodies.has(method):
+			entries.append([String(method), float(SHARD_WEIGHT_SECONDS[method])])
+	entries.sort_custom(func(a, b):
+		if float(a[1]) != float(b[1]):
+			return float(a[1]) > float(b[1])
+		return String(a[0]) < String(b[0])
+	)
+	var loads: Array[float] = []
+	loads.resize(_run_shards)
+	loads.fill(0.0)
+	for e in entries:
+		var least := 0
+		for k in range(1, _run_shards):
+			if loads[k] < loads[least]:
+				least = k
+		_run_preassigned[String(e[0])] = least
+		loads[least] += float(e[1])
+	for k in range(_run_shards):
+		_run_shard_load[k] = loads[k]
 
 func _runner_setup() -> bool:
 	_section_mark_ms = Time.get_ticks_msec()
@@ -339,6 +421,8 @@ func _runner_setup() -> bool:
 			_run_abort = true
 			quit(2)
 			return false
+	if _run_shards > 0:
+		_runner_preassign_shards()
 	_run_filtered = not _run_only.is_empty() or _run_match != "" or _run_skip_slow or _run_shards > 0
 	for wanted in _run_only:
 		var known := false
@@ -377,13 +461,16 @@ func _runner_wants(test: Callable, is_ui: bool) -> bool:
 	var title := String(info["title"])
 	_run_tests_total += 1
 	var is_slow := SLOW_TEST_SECONDS.has(method)
-	var weight := float(SLOW_TEST_SECONDS.get(method, 0.2))
+	var weight := float(SHARD_WEIGHT_SECONDS.get(method, 0.2))
 	var shard := 0
 	if _run_shards > 0 and is_ui:
-		for k in range(_run_shards):
-			if _run_shard_load[k] < _run_shard_load[shard]:
-				shard = k
-	if _run_shards > 0:
+		if _run_preassigned.has(method):
+			shard = int(_run_preassigned[method])
+		else:
+			for k in range(_run_shards):
+				if _run_shard_load[k] < _run_shard_load[shard]:
+					shard = k
+	if _run_shards > 0 and not _run_preassigned.has(method):
 		_run_shard_load[shard] += weight
 	var wanted := true
 	if not _run_only.is_empty():
@@ -11940,6 +12027,20 @@ func _p42_clear_toasts(ui: Node) -> void:
 		await process_frame
 		guard += 1
 
+func _p42_expire_toasts(ui: Node) -> void:
+	# The game's own toast lifetime is a per-toast tween: interval (3.5 s),
+	# fade, then the erase callback. Run those exact tweens to completion by
+	# scaling engine time instead of idling a real 3.5 s per clear: the same
+	# interval, fade and erase-callback execute, only the wall-clock wait is
+	# compressed. The first clear in the body keeps the real-time wait so the
+	# expiry path is still proven un-accelerated once per run.
+	Engine.time_scale = 60.0
+	var guard := 0
+	while guard < 120 and not ui._toast_labels.is_empty():
+		await process_frame
+		guard += 1
+	Engine.time_scale = 1.0
+
 func _p42_toast_text(ui: Node) -> String:
 	var all := ""
 	for lbl in ui._toast_labels:
@@ -12066,7 +12167,7 @@ func _test_p42_transparent_animations_body(ui: Node) -> void:
 	_assert(gone and g2 > 40, "p42 B2: the confirmation faded within ~1.2 s (frames %d)" % g2)
 	_assert(st.last_steal.size() > 0, "p42 B2: the steal was recorded")
 	_assert(_p42_toast_text(ui).contains("You stole 1"), "p42 B2: the steal toast shows alongside")
-	await _p42_clear_toasts(ui)
+	await _p42_expire_toasts(ui)
 
 	# B3: two victims -> pick one in the chooser, the same confirmation lands on the picked player
 	_p42_wipe_board_for_steal(ui, 2, [1, 2], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {GameTypes.ALL_RESOURCES[1]: 2}, 2: {GameTypes.ALL_RESOURCES[2]: 1}})
@@ -12099,7 +12200,7 @@ func _test_p42_transparent_animations_body(ui: Node) -> void:
 		await process_frame
 		g3 += 1
 	_assert(not bool(ui._board_view.steal_confirm_showing()), "p42 B3: the confirmation faded")
-	await _p42_clear_toasts(ui)
+	await _p42_expire_toasts(ui)
 
 	# a BOT's zero-victim move must not raise the human's info toast
 	_p42_wipe_board_for_steal(ui, 2, [1], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {GameTypes.ALL_RESOURCES[0]: 2}, 2: {}})
@@ -12113,7 +12214,7 @@ func _test_p42_transparent_animations_body(ui: Node) -> void:
 		not _p42_toast_text(ui).contains("no one there to steal from"),
 		"p42 B1: a bot's steal-less move shows no info toast: %s" % _p42_toast_text(ui)
 	)
-	await _p42_clear_toasts(ui)
+	await _p42_expire_toasts(ui)
 
 	# reduce motion: the confirmation exists (no pulse: the board's drawing gate
 	# is exactly reduce_motion), without any dice show
@@ -12144,7 +12245,7 @@ func _test_p42_transparent_animations_body(ui: Node) -> void:
 
 	# p42 follow-up: guard play with zero victims toasts too (guard moves the
 	# Blocker), and a REJECTED move must not toast.
-	await _p42_clear_toasts(ui)
+	await _p42_expire_toasts(ui)
 	_p42_wipe_board_for_steal(ui, 2, [], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {}, 2: {}})
 	st.players[0]["dev_cards"] = [GameTypes.DevCardType.GUARD]
 	await _p42_reset_to_roll(ui, st)
@@ -12164,7 +12265,7 @@ func _test_p42_transparent_animations_body(ui: Node) -> void:
 		_p42_toast_text(ui).contains("Blocker moved — no one there to steal from."),
 		"p42 follow-up: Guard with zero victims shows the info toast: %s" % _p42_toast_text(ui)
 	)
-	await _p42_clear_toasts(ui)
+	await _p42_expire_toasts(ui)
 
 	# rejected move: force the current blocker tile into the highlight set and
 	# click it — the engine refuses ("different tile"), so no toast may appear
@@ -12348,7 +12449,6 @@ func _test_p43_hand_flight_body(ui: Node) -> void:
 	ui._review_active = false
 
 	# E) an unresolvable hand card falls back to the scoreboard row, never (0,0)
-	ui.session.start_match(4817, seats3, true, 0)
 	ui._last_steal_serial = 0
 	st = ui.session.state
 	await _ui_settle(3)
@@ -12404,7 +12504,6 @@ func _test_p43_hand_flight_body(ui: Node) -> void:
 		_assert(bool(p43r_t1["inside1"]), "p43r T1: the flight starts on the viewer's hand card (start %s res %d)" % [str(p43r_t1["c1"]), int(p43r_t1["res1"])])
 
 	# T2 (R2): the human must discard first (9 cards), then the same bot robs.
-	ui.session.start_match(4820, p43r_seats, true, 0)
 	ui._last_steal_serial = 0
 	st = ui.session.state
 	await _ui_settle(3)
@@ -12419,7 +12518,6 @@ func _test_p43_hand_flight_body(ui: Node) -> void:
 		_assert(bool(p43r_t2["inside1"]), "p43r T2: the post-discard flight still starts on the hand card (start %s)" % str(p43r_t2["c1"]))
 
 	# T3 (R4): a bot plays its Guard card instead of rolling and robs the human.
-	ui.session.start_match(4820, p43r_seats, true, 0)
 	ui._last_steal_serial = 0
 	st = ui.session.state
 	await _ui_settle(3)
@@ -12434,11 +12532,11 @@ func _test_p43_hand_flight_body(ui: Node) -> void:
 
 	# T4 (R5+R7): consecutive 7s rob the human twice in a row; each flight (the
 	# second one may take the LAST card of its resource) lifts off the hand card.
-	ui.session.start_match(4820, p43r_seats, true, 0)
 	ui._last_steal_serial = 0
 	st = ui.session.state
 	await _ui_settle(3)
 	_p43r_wipe(ui, [[0, 2], [0, 4]], {0: {TIMBER: 2, CLAY: 1, IRON: 1}, 1: {IRON: 2}, 2: {TIMBER: 2}, 3: {CLAY: 1}})
+	st.players[1]["dev_cards"] = []
 	st.phase = GameTypes.TurnPhase.TURN_ROLL
 	st.current_player = 1
 	st.rng.seed = 9
@@ -12452,7 +12550,6 @@ func _test_p43_hand_flight_body(ui: Node) -> void:
 	# T5 (R6): an unanswered open offer parks every bot (acting player = the
 	# human), so a roll/rob can never overlap an open offer, and the hand bar
 	# cannot be swapped for the trade tray on an enemy turn.
-	ui.session.start_match(4820, p43r_seats, true, 0)
 	ui._last_steal_serial = 0
 	st = ui.session.state
 	await _ui_settle(3)
@@ -12473,6 +12570,10 @@ func _test_p43_hand_flight_body(ui: Node) -> void:
 
 func _p43r_wipe(ui: Node, owner_tiles: Array, hands: Dictionary) -> void:
 	var st = ui.session.state
+	# full reset for match reuse between blocks
+	st.open_trade = {}
+	st.open_trades_this_turn = 0
+	st.pending_discards.clear()
 	for v in range(st.vertex_owner.size()):
 		st.vertex_owner[v] = -1
 		st.vertex_building[v] = GameTypes.BuildingType.NONE
@@ -12511,8 +12612,16 @@ func _p43r_step_until_flights(ui: Node, want: int) -> Dictionary:
 		"discarded": false, "seen": 0,
 	}
 	var st = ui.session.state
+	# a block reuses the previous match, so a steal flight already in the air
+	# belongs to the PREVIOUS block: only count flyers whose steal serial is
+	# newer than the one recorded at entry.
+	var serial0 := int(st.last_steal.get("serial", 0))
 	var settle := 0
-	while (ui._steal_anim_active() or ui._dice_show_active) and settle < 600:
+	while settle < 600:
+		var f: Variant = ui._steal_flyer
+		var alive: bool = f != null and is_instance_valid(f) and (f as Control).is_visible_in_tree()
+		if not ui._steal_anim_active() and not ui._dice_show_active and not alive:
+			break
 		settle += 1
 		await process_frame
 	var was := false
@@ -12522,7 +12631,8 @@ func _p43r_step_until_flights(ui: Node, want: int) -> Dictionary:
 		guard += 1
 		var fly: Variant = ui._steal_flyer
 		var vis: bool = fly != null and is_instance_valid(fly) and (fly as Control).is_visible_in_tree()
-		if vis and not was:
+		var fresh: bool = vis and int(st.last_steal.get("serial", 0)) > serial0
+		if fresh and not was:
 			seen += 1
 			var c: Vector2 = (fly as Control).get_global_rect().get_center()
 			var res: int = int(st.last_steal.get("res", -1))
@@ -12539,8 +12649,8 @@ func _p43r_step_until_flights(ui: Node, want: int) -> Dictionary:
 				out["c2"] = c
 				out["inside2"] = inside
 				out["res2"] = res
-		was = vis
-		if seen < want and not vis and not ui._steal_anim_active() and not ui._dice_show_active:
+		was = fresh
+		if seen < want and not fresh and not ui._steal_anim_active() and not ui._dice_show_active:
 			if ui.session.is_ai_to_act():
 				ui.session.step_ai()
 			else:
