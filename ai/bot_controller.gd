@@ -26,6 +26,7 @@ static func choose_action(state: GameState, player_id: int, difficulty: int = 2)
 		var open_responses: Dictionary = state.open_trade.get("responses", {})
 		if not open_responses.has(player_id):
 			return _choose_open_trade_response(state, player_id, difficulty)
+		return _choose_open_trade_review(state, player_id, difficulty)
 
 	# 3. Phase-based decisions
 	match state.phase:
@@ -924,6 +925,131 @@ static func _choose_open_trade_response(state: GameState, player_id: int, diffic
 				return GameAction.respond_open_trade("counter", counter_offer, counter_request)
 
 	return GameAction.respond_open_trade("decline")
+
+static func _terms_gain_for_responder(resp: Dictionary) -> int:
+	# What the responder nets from a response's terms: the proposer's "offer"
+	# is what the responder receives, the "request" is what they pay.
+	var gain := 0
+	var cost := 0
+	for r in GameTypes.ALL_RESOURCES:
+		gain += int((resp.get("offer", {}) as Dictionary).get(r, 0))
+		cost += int((resp.get("request", {}) as Dictionary).get(r, 0))
+	return gain - cost
+
+static func _terms_gain_for_proposer(resp: Dictionary) -> int:
+	# What the proposer nets if this response is taken: they receive the
+	# responder's "request" and pay the responder's "offer".
+	var gain := 0
+	var cost := 0
+	for r in GameTypes.ALL_RESOURCES:
+		gain += int((resp.get("request", {}) as Dictionary).get(r, 0))
+		cost += int((resp.get("offer", {}) as Dictionary).get(r, 0))
+	return gain - cost
+
+static var revisions_enabled := true
+
+static func _choose_open_trade_review(state: GameState, player_id: int, difficulty: int) -> Dictionary:
+	# A bot generally sticks with its answer. It revises only when necessary,
+	# and a revision must never make the deal less attractive to the proposer.
+	if not revisions_enabled:
+		return GameAction.review_open_trade()
+	var ot: Dictionary = state.open_trade
+	var responses: Dictionary = ot.get("responses", {})
+	var from_id := int(ot.get("from", -1))
+	var my: Dictionary = responses.get(player_id, {})
+	if my.is_empty():
+		return _choose_open_trade_response(state, player_id, difficulty)
+	var revisions: Dictionary = ot.get("revisions", {})
+	if difficulty <= 1 or int(revisions.get(player_id, 0)) >= 1:
+		return GameAction.review_open_trade()
+	var my_status := str(my.get("status", ""))
+	var hand: Dictionary = state.players[player_id]["hand"]
+	var min_gain: int = 2 if difficulty == 2 else 1
+	if my_status == "accept":
+		# Only a broken payment forces an acceptor off its answer.
+		if not _hand_has(hand, my.get("request", {})):
+			return GameAction.respond_open_trade("decline")
+		return GameAction.review_open_trade()
+	if my_status == "decline":
+		# Join a deal posted by another responder if it is a clear gain.
+		var any_accept := false
+		for key in responses.keys():
+			if int(key) == player_id or int(key) == from_id:
+				continue
+			if str((responses[key] as Dictionary).get("status", "")) == "accept":
+				any_accept = true
+				break
+		if any_accept and _hand_has(hand, ot.get("request", {})) and _should_accept_terms(
+			state, player_id, from_id, ot.get("offer", {}), ot.get("request", {}), difficulty
+		):
+			return GameAction.respond_open_trade("accept")
+		var best_terms: Dictionary = {}
+		var best_gain := min_gain
+		for key in responses.keys():
+			var pid2 := int(key)
+			if pid2 == player_id or pid2 == from_id:
+				continue
+			var r2: Dictionary = responses[key]
+			if str(r2.get("status", "")) != "counter":
+				continue
+			var g2 := _terms_gain_for_responder(r2)
+			if g2 < best_gain:
+				continue
+			if not _hand_has(hand, r2.get("request", {})):
+				continue
+			if not _should_accept_terms(state, player_id, from_id, r2.get("offer", {}), r2.get("request", {}), difficulty):
+				continue
+			best_gain = g2
+			best_terms = r2
+		if not best_terms.is_empty():
+			return GameAction.respond_open_trade(
+				"counter",
+				(best_terms.get("offer", {}) as Dictionary).duplicate(),
+				(best_terms.get("request", {}) as Dictionary).duplicate()
+			)
+		return GameAction.review_open_trade()
+	if my_status == "counter":
+		if not _hand_has(hand, my.get("request", {})):
+			return GameAction.respond_open_trade("decline")
+		# Only undercut for the proposer: another answer that beats mine for
+		# the proposer by a margin, which I would myself take.
+		var my_ps := _terms_gain_for_proposer(my)
+		var best_ps := my_ps + min_gain
+		var best_terms: Dictionary = {}
+		var best_status := ""
+		for key in responses.keys():
+			var pid2 := int(key)
+			if pid2 == player_id or pid2 == from_id:
+				continue
+			var r2: Dictionary = responses[key]
+			var s2 := str(r2.get("status", ""))
+			if s2 != "accept" and s2 != "counter":
+				continue
+			var ps2 := _terms_gain_for_proposer(r2)
+			if ps2 < best_ps:
+				continue
+			var want_offer: Dictionary = r2.get("offer", {}) if s2 == "counter" else ot.get("offer", {})
+			var want_request: Dictionary = r2.get("request", {}) if s2 == "counter" else ot.get("request", {})
+			if s2 == "accept":
+				want_offer = ot.get("offer", {})
+				want_request = ot.get("request", {})
+			if not _hand_has(hand, want_request):
+				continue
+			if not _should_accept_terms(state, player_id, from_id, want_offer, want_request, difficulty):
+				continue
+			best_ps = ps2
+			best_terms = r2
+			best_status = s2
+		if best_status == "accept":
+			return GameAction.respond_open_trade("accept")
+		if best_status == "counter":
+			return GameAction.respond_open_trade(
+				"counter",
+				(best_terms.get("offer", {}) as Dictionary).duplicate(),
+				(best_terms.get("request", {}) as Dictionary).duplicate()
+			)
+		return GameAction.review_open_trade()
+	return GameAction.review_open_trade()
 
 static func _choose_counter_terms(
 	state: GameState,

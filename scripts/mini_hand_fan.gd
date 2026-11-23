@@ -1,8 +1,14 @@
 class_name MiniHandFan
 extends Control
 
-var count := 0
+var count := 0:
+	set(v):
+		if count == v:
+			return
+		count = v
+		queue_redraw()
 var variant := 0
+var drawn_count := -1
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -10,6 +16,7 @@ func _ready() -> void:
 		custom_minimum_size = Vector2(44, 26)
 
 func _draw() -> void:
+	drawn_count = count
 	var font := ThemeDB.fallback_font
 	var cw := 11.0
 	var chh := 15.0

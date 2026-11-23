@@ -2,6 +2,7 @@ class_name RulesEngine
 extends RefCounted
 
 const MAX_OPEN_TRADES_PER_TURN := 3
+const MAX_TRADE_RESPONSE_REVISIONS := 3
 
 static func get_valid_settlement_vertices(state: GameState, player_id: int, is_setup: bool) -> Array[int]:
 	var valid: Array[int] = []
@@ -108,6 +109,8 @@ static func apply_action(state: GameState, player_id: int, action: Dictionary) -
 		match action_type:
 			"respond_open_trade":
 				return _handle_respond_open_trade(state, player_id, action, events)
+			"review_open_trade":
+				return _handle_review_open_trade(state, player_id, events)
 			"finalize_open_trade":
 				return _handle_finalize_open_trade(state, player_id, action, events)
 			"cancel_open_trade":
@@ -574,6 +577,9 @@ static func _handle_open_trade(state: GameState, player_id: int, action: Diction
 		"offer": offer,
 		"request": request,
 		"responses": {},
+		"revisions": {},
+		"resp_ticks": {},
+		"reviews": {},
 	}
 	state.open_trades_this_turn += 1
 	events.append("%s offers %s for %s." % [
@@ -587,13 +593,16 @@ static func _handle_respond_open_trade(state: GameState, player_id: int, action:
 		return _fail("The proposer cannot respond to their own offer.")
 
 	var responses: Dictionary = state.open_trade.get("responses", {})
-	if responses.has(player_id):
-		return _fail("You have already responded to this offer.")
+	var revising := responses.has(player_id)
+	var revisions: Dictionary = state.open_trade.get("revisions", {})
+	if revising and int(revisions.get(player_id, 0)) >= MAX_TRADE_RESPONSE_REVISIONS:
+		return _fail("You have used all %d changes for this offer." % MAX_TRADE_RESPONSE_REVISIONS)
 
 	var status: String = str(action.get("status", ""))
 	var p: Dictionary = state.players[player_id]
 	var offer: Dictionary = state.open_trade.get("offer", GameTypes.empty_hand())
 	var request: Dictionary = state.open_trade.get("request", GameTypes.empty_hand())
+	var suffix := ""
 
 	if status == "accept":
 		if not _has_resources(p["hand"], request):
@@ -603,19 +612,15 @@ static func _handle_respond_open_trade(state: GameState, player_id: int, action:
 			"offer": offer.duplicate(),
 			"request": request.duplicate(),
 		}
-		events.append("%s accepts." % p["name"])
-		return _ok(events)
-
-	if status == "decline":
+		suffix = "accepts."
+	elif status == "decline":
 		responses[player_id] = {
 			"status": "decline",
 			"offer": offer.duplicate(),
 			"request": request.duplicate(),
 		}
-		events.append("%s declines." % p["name"])
-		return _ok(events)
-
-	if status == "counter":
+		suffix = "declines."
+	elif status == "counter":
 		var terms := _build_trade_terms(
 			action.get("offer", {}),
 			action.get("request", {})
@@ -631,12 +636,41 @@ static func _handle_respond_open_trade(state: GameState, player_id: int, action:
 			"offer": counter_offer,
 			"request": counter_request,
 		}
-		events.append("%s counters: gives %s for %s." % [
-			p["name"], _format_resources(counter_request), _format_resources(counter_offer)
-		])
-		return _ok(events)
+		suffix = "counters: gives %s for %s." % [
+			_format_resources(counter_request), _format_resources(counter_offer)
+		]
+	else:
+		return _fail("Invalid trade response status '%s'." % status)
 
-	return _fail("Invalid trade response status '%s'." % status)
+	if revising:
+		revisions[player_id] = int(revisions.get(player_id, 0)) + 1
+		state.open_trade["revisions"] = revisions
+		events.append("%s revises: %s" % [p["name"], suffix])
+	else:
+		events.append("%s %s" % [p["name"], suffix])
+	var ticks: Dictionary = state.open_trade.get("resp_ticks", {})
+	ticks[player_id] = int(ticks.get(player_id, 0)) + 1
+	state.open_trade["resp_ticks"] = ticks
+	return _ok(events)
+
+static func _trade_resp_total(ot: Dictionary) -> int:
+	var total := 0
+	var ticks: Dictionary = ot.get("resp_ticks", {})
+	for k in ticks.keys():
+		total += int(ticks[k])
+	return total
+
+static func _handle_review_open_trade(state: GameState, player_id: int, events: Array[String]) -> Dictionary:
+	var from_id: int = int(state.open_trade.get("from", -1))
+	if player_id == from_id:
+		return _fail("The proposer does not review their own offer.")
+	var responses: Dictionary = state.open_trade.get("responses", {})
+	if not responses.has(player_id):
+		return _fail("Only players who have answered can review the answers.")
+	var reviews: Dictionary = state.open_trade.get("reviews", {})
+	reviews[player_id] = _trade_resp_total(state.open_trade)
+	state.open_trade["reviews"] = reviews
+	return _ok(events)
 
 static func _handle_finalize_open_trade(state: GameState, player_id: int, action: Dictionary, events: Array[String]) -> Dictionary:
 	var from_id: int = int(state.open_trade.get("from", -1))

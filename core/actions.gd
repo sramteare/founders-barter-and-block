@@ -44,6 +44,9 @@ static func finalize_open_trade(partner: int) -> Dictionary:
 static func cancel_open_trade() -> Dictionary:
 	return {"type": "cancel_open_trade"}
 
+static func review_open_trade() -> Dictionary:
+	return {"type": "review_open_trade"}
+
 static func buy_dev_card() -> Dictionary:
 	return {"type": "buy_dev_card"}
 

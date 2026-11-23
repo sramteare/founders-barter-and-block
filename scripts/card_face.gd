@@ -4,10 +4,11 @@ extends Control
 signal pressed()
 signal badge_pressed()
 signal right_pressed()
+signal count_pressed()
 
 const RATIO := 5.0 / 7.0
 const BADGE_COLOR := Color(0.68, 0.23, 0.16)
-const PILE_RESERVE := 48.0
+const PILE_RESERVE := 34.0
 
 var kind := "resource":
 	set(v):
@@ -65,6 +66,10 @@ var stack_depth := 0:
 		_mark_dirty()
 var focusable := true
 var count_badge := true
+var count_clickable := false
+var _hover_count := false
+var _touch_hint := false
+var _last_touch_ms := 0
 var emblem_only := false:
 	set(v):
 		if emblem_only == v:
@@ -120,17 +125,53 @@ func _ready() -> void:
 	)
 	mouse_exited.connect(func() -> void:
 		_hover = false
+		_hover_count = false
 		queue_redraw()
 	)
 
+func count_badge_radius() -> float:
+	if size.x >= 50.0:
+		return minf(size.x * 0.28, maxf(8.0, size.x * 0.18))
+	return minf(9.0, maxf(4.5, size.x * 0.16))
+
+func count_badge_rect() -> Rect2:
+	var cr := _card_rect()
+	var r := count_badge_radius()
+	if size.x >= 50.0:
+		var c2 := Vector2(cr.end.x - r - 2.0, cr.position.y + r + 2.0)
+		return Rect2(c2 - Vector2(r, r), Vector2(r * 2.0, r * 2.0))
+	var cx := minf(cr.end.x, size.x - r - 2.0)
+	var cy := maxf(cr.position.y, r + 2.0)
+	return Rect2(Vector2(cx - r, cy - r), Vector2(r * 2.0, r * 2.0))
+
+func count_hit_rect() -> Rect2:
+	var w := maxf(24.0, count_badge_rect().size.x + 6.0)
+	w = minf(w, minf(size.x, size.y))
+	return Rect2(Vector2(size.x - w, 0.0), Vector2(w, w))
+
+func _emblem_badge_cut(cr: Rect2) -> float:
+	if count_badge and count > 0:
+		return cr.position.y + 2.0 + 2.0 * count_badge_radius() + 2.0
+	return -1000.0
+
+func emblem_bounds() -> Rect2:
+	var cr := _card_rect()
+	var inner := cr.grow(-4.0)
+	var r: Rect2
+	if show_name and size.x >= 34.0:
+		r = Rect2(inner.position + inner.size * Vector2(0.11, 0.10), inner.size * Vector2(0.78, 0.55))
+	else:
+		r = Rect2(inner.position + inner.size * Vector2(0.09, 0.18), inner.size * Vector2(0.82, 0.64))
+	var cut := _emblem_badge_cut(cr)
+	if r.position.y < cut and r.end.y > cut:
+		r.size.y = maxf(4.0, r.end.y - cut)
+		r.position.y = cut
+	return r
+
 func badge_bounds() -> Array[Rect2]:
 	var out: Array[Rect2] = []
-	var cr := _card_rect()
 	if count > 0 and count_badge:
-		var rr2 := maxf(9.0, size.x * 0.18)
-		var c2 := Vector2(cr.end.x - rr2 - 2.0, cr.position.y + rr2 + 2.0)
-		var r2 := rr2 + 1.5
-		out.append(Rect2(c2 - Vector2(r2, r2), Vector2(r2 * 2.0, r2 * 2.0)))
+		out.append(count_badge_rect().grow(1.5))
 	if badge > 0:
 		var bc := badge_center_local()
 		var rr := _badge_rect().size.x * 0.5 + 1.5
@@ -218,6 +259,10 @@ func _draw() -> void:
 	var emblem_rect := Rect2(inner.position + inner.size * Vector2(0.11, 0.10), inner.size * Vector2(0.78, 0.55))
 	if not want_name:
 		emblem_rect = Rect2(inner.position + inner.size * Vector2(0.09, 0.18), inner.size * Vector2(0.82, 0.64))
+	var badge_cut := _emblem_badge_cut(cr)
+	if emblem_rect.position.y < badge_cut and emblem_rect.end.y > badge_cut:
+		emblem_rect.size.y = maxf(4.0, emblem_rect.end.y - badge_cut)
+		emblem_rect.position.y = badge_cut
 	if kind == "resource" and resource >= 0:
 		draw_emblem(self, "resource", resource, emblem_rect, a)
 		if want_name:
@@ -239,7 +284,7 @@ func _draw_pile_edges(cr: Rect2) -> void:
 	var paper := Color(0.93, 0.90, 0.82, 0.95)
 	var last_i := pile_count - 1
 	for i in range(1, pile_count):
-		var y0 := cr.end.y + float(i - 1) * 2.0
+		var y0 := cr.end.y + float(i - 1) * 1.5
 		if i == last_i:
 			var sb := StyleBoxFlat.new()
 			sb.bg_color = paper
@@ -305,16 +350,28 @@ func _draw_back(cr: Rect2) -> void:
 func _draw_badges(cr: Rect2) -> void:
 	var font := ThemeDB.fallback_font
 	if count > 0 and count_badge:
-		var rr2 := maxf(9.0, size.x * 0.18)
-		var bx := cr.end.x - rr2 - 2.0
-		var by := cr.position.y + rr2 + 2.0
+		var rr2 := count_badge_radius()
+		var br2 := count_badge_rect()
+		var bx := br2.get_center().x
+		var by := br2.get_center().y
 		var col := Color(0.91, 0.70, 0.28)
+		var bx2 := bx
+		if count_clickable and not disabled:
+			if _hover_count:
+				col = Color(0.82, 0.30, 0.24)
+			elif _touch_hint:
+				bx2 = bx - 3.0
 		draw_circle(Vector2(bx, by), rr2, col)
 		draw_arc(Vector2(bx, by), rr2, 0.0, TAU, 20, Palette.INK, 1.5, true)
 		var txt2 := "x%d" % count
+		if count_clickable and not disabled:
+			if _hover_count:
+				txt2 = "\u2212%d" % count
+			elif _touch_hint:
+				txt2 = "x%d\u2212" % count
 		var fs2 := maxi(10, int(rr2))
 		var ts2 := font.get_string_size(txt2, HORIZONTAL_ALIGNMENT_CENTER, -1, fs2)
-		draw_string(font, Vector2(snappedf(bx - ts2.x * 0.5, 1.0), snappedf(by + ts2.y * 0.32, 1.0)), txt2, HORIZONTAL_ALIGNMENT_LEFT, -1, fs2, Palette.INK)
+		draw_string(font, Vector2(snappedf(bx2 - ts2.x * 0.5, 1.0), snappedf(by + ts2.y * 0.32, 1.0)), txt2, HORIZONTAL_ALIGNMENT_LEFT, -1, fs2, Palette.INK)
 	if badge > 0:
 		var br := _badge_rect()
 		var bc := br.get_center()
@@ -327,8 +384,16 @@ func _draw_badges(cr: Rect2) -> void:
 		draw_string(font, Vector2(snappedf(bc.x - ts.x * 0.5, 1.0), snappedf(bc.y + ts.y * 0.32, 1.0)), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.97, 0.93, 0.88))
 
 func _draw_name(font: Font, cr: Rect2, text: String, col: Color) -> void:
+	var max_w := cr.size.x - 4.0
+	if max_w < 18.0:
+		return
 	var fs := clampi(int(cr.size.x * 0.16), 9, 10)
 	var ts := font.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
+	while fs > 6 and ts.x > max_w:
+		fs -= 1
+		ts = font.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
+	if ts.x > max_w:
+		return
 	var x := snappedf(cr.get_center().x - ts.x * 0.5, 1.0)
 	var y := snappedf(cr.end.y - 6.0, 1.0)
 	draw_string(font, Vector2(x, y), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
@@ -340,7 +405,28 @@ func _gui_input(event: InputEvent) -> void:
 			pressed.emit()
 			accept_event()
 		return
+	if event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			_touch_hint = true
+			_last_touch_ms = Time.get_ticks_msec()
+			if not disabled:
+				if count_clickable and count > 0 and count_hit_rect().has_point(st.position):
+					count_pressed.emit()
+				else:
+					pressed.emit()
+			accept_event()
+		return
+	if event is InputEventMouseMotion:
+		if count_clickable and not disabled and count > 0:
+			var hc := count_hit_rect().has_point((event as InputEventMouseMotion).position)
+			if hc != _hover_count:
+				_hover_count = hc
+				queue_redraw()
+		return
 	if event is InputEventMouseButton:
+		if _last_touch_ms != 0 and Time.get_ticks_msec() - _last_touch_ms < 300:
+			return
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_RIGHT:
 			if mb.pressed and not disabled:
@@ -355,7 +441,9 @@ func _gui_input(event: InputEvent) -> void:
 			_press_inside = false
 			if disabled:
 				return
-			if badge > 0 and _badge_rect().grow(3.0).has_point(mb.position):
+			if count_clickable and count > 0 and count_hit_rect().has_point(mb.position):
+				count_pressed.emit()
+			elif badge > 0 and _badge_rect().grow(3.0).has_point(mb.position):
 				badge_pressed.emit()
 			else:
 				pressed.emit()

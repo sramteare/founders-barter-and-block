@@ -7,6 +7,7 @@ signal action_rejected(player_id: int, error: String)
 var state: GameState = null
 var seats: Array[SeatConfig] = []
 var ai_rejected_count: int = 0
+var replay: MatchReplay = null
 var _ai_steps_in_turn: int = 0
 var _last_tracked_turn: int = -1
 var _last_tracked_player: int = -1
@@ -34,6 +35,9 @@ func start_match(seed_val: int, seat_configs: Array[SeatConfig], balanced: bool 
 	_last_tracked_turn = state.turn_number
 	_last_tracked_player = state.current_player
 
+	replay = MatchReplay.new()
+	replay.begin_match(seed_val, balanced, forced_start_player, seats, state)
+
 	var init_events: Array[String] = ["Match started with %d seats (Seed: %d)." % [num_p, seed_val]]
 	state_updated.emit(state, init_events)
 
@@ -50,11 +54,19 @@ func submit_action(player_id: int, action: Dictionary) -> Dictionary:
 		if raw_events is Array:
 			for ev in raw_events:
 				typed_events.append(str(ev))
+		if replay != null:
+			replay.record_action(player_id, action, typed_events, state.turn_number)
+			replay.maybe_snapshot(state)
+			if state.phase == GameTypes.TurnPhase.GAME_OVER:
+				replay.set_final(state)
 		state_updated.emit(state, typed_events)
 	else:
 		var err_str: String = str(result.get("error", "Invalid action."))
 		action_rejected.emit(player_id, err_str)
 	return result
+
+func _seat_is_ai(p_id: int) -> bool:
+	return p_id >= 0 and p_id < seats.size() and seats[p_id].is_ai()
 
 func get_acting_player_id() -> int:
 	if state == null:
@@ -70,9 +82,21 @@ func get_acting_player_id() -> int:
 		var proposer: int = int(state.open_trade.get("from", state.current_player))
 		var responses: Dictionary = state.open_trade.get("responses", {})
 		for p_id in range(state.num_players):
-			if p_id == proposer:
+			if p_id == proposer or not _seat_is_ai(p_id):
 				continue
 			if not responses.has(p_id):
+				return p_id
+		for p_id in range(state.num_players):
+			if p_id == proposer or _seat_is_ai(p_id):
+				continue
+			if not responses.has(p_id):
+				return p_id
+		var reviews: Dictionary = state.open_trade.get("reviews", {})
+		var total_ticks: int = RulesEngine._trade_resp_total(state.open_trade)
+		for p_id in range(state.num_players):
+			if p_id == proposer or not _seat_is_ai(p_id):
+				continue
+			if responses.has(p_id) and int(reviews.get(p_id, -1)) < total_ticks:
 				return p_id
 		return proposer
 	return state.current_player
@@ -94,13 +118,20 @@ func step_ai() -> Dictionary:
 		_last_tracked_turn = state.turn_number
 		_last_tracked_player = state.current_player
 		_ai_steps_in_turn = 0
-	_ai_steps_in_turn += 1
+	# The guard measures the turn owner's own actions only. Other seats' trade
+	# responses and review passes are bounded by the trade engine itself and
+	# must not eat into the owner's budget (a full offer wave costs ~7 steps).
+	if acting_id == state.current_player:
+		_ai_steps_in_turn += 1
 
 	# Safety guard against excessive AI actions within a single turn
 	if _ai_steps_in_turn > 20 and state.phase == GameTypes.TurnPhase.TURN_MAIN:
 		if not state.open_trade.is_empty():
 			if int(state.open_trade.get("from", -1)) == acting_id:
 				return submit_action(acting_id, GameAction.cancel_open_trade())
+			if (state.open_trade.get("responses", {}) as Dictionary).has(acting_id):
+				# Never overwrite an answer that is already in: review it.
+				return submit_action(acting_id, GameAction.review_open_trade())
 			return submit_action(acting_id, GameAction.respond_open_trade("decline"))
 		return submit_action(acting_id, GameAction.end_turn())
 
@@ -134,6 +165,14 @@ func get_ai_difficulty() -> int:
 			return seat.get_difficulty()
 	return 2
 
+# Direct GameState writes outside RulesEngine.apply_action must be replayable:
+# record them as patch entries before applying them to the live state.
+func _direct_state_write(fields: Dictionary) -> void:
+	if replay != null:
+		replay.record_patch(fields)
+	for k in fields.keys():
+		state.set(str(k), fields[k])
+
 func _execute_fallback_action(acting_id: int) -> Dictionary:
 	if not state.open_trade.is_empty():
 		var proposer: int = int(state.open_trade.get("from", -1))
@@ -162,8 +201,7 @@ func _execute_fallback_action(acting_id: int) -> Dictionary:
 		GameTypes.TurnPhase.TURN_MAIN:
 			return submit_action(acting_id, GameAction.end_turn())
 		GameTypes.TurnPhase.TURN_ROAD_WORK:
-			state.road_work_remaining = 0
-			state.phase = GameTypes.TurnPhase.TURN_MAIN
+			_direct_state_write({"road_work_remaining": 0, "phase": GameTypes.TurnPhase.TURN_MAIN})
 			return submit_action(acting_id, GameAction.end_turn())
 		GameTypes.TurnPhase.TURN_ROLL:
 			return submit_action(acting_id, GameAction.roll_dice())
