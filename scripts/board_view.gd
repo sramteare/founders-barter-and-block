@@ -38,6 +38,10 @@ var _steal_hover: int = -1
 var _steal_pending_tile: int = -1
 var _steal_ring_rects: Array[Rect2] = []
 var _steal_tag_rects: Array[Rect2] = []
+var _steal_confirm: Array = []
+var _confirm_ring_rects: Array[Rect2] = []
+var _confirm_tag_rects: Array[Rect2] = []
+const CONFIRM_DURATION := 1.2
 var _hovered_city_vertex: int = -1
 
 var _popups: Array = []
@@ -159,6 +163,16 @@ func _process(delta: float) -> void:
 			if float(toast["age"]) >= float(toast["duration"]):
 				_toasts.remove_at(i)
 		needs_redraw = not _toasts.is_empty() or needs_redraw
+	if not _steal_confirm.is_empty():
+		for i in range(_steal_confirm.size() - 1, -1, -1):
+			var ce: Dictionary = _steal_confirm[i]
+			ce["age"] = float(ce["age"]) + delta
+			if float(ce["age"]) >= CONFIRM_DURATION:
+				_steal_confirm.remove_at(i)
+		if _steal_confirm.is_empty():
+			_confirm_ring_rects.clear()
+			_confirm_tag_rects.clear()
+		needs_redraw = true
 	if not _build_anims.is_empty():
 		var had_builds := true
 		for i in range(_build_anims.size() - 1, -1, -1):
@@ -260,6 +274,8 @@ func clear_highlights() -> void:
 
 func is_busy() -> bool:
 	if not _steal_targets.is_empty():
+		return true
+	if not _steal_confirm.is_empty():
 		return true
 	if not _popups.is_empty() or not _toasts.is_empty() or not _build_anims.is_empty():
 		return true
@@ -677,6 +693,8 @@ func _draw() -> void:
 
 func set_steal_targets(targets: Array, pending_tile: int) -> void:
 	_steal_targets = targets.duplicate(true)
+	if not targets.is_empty():
+		clear_steal_confirmation()
 	_steal_pending_tile = pending_tile
 	_steal_hover = -1
 	_compute_steal_layout()
@@ -688,23 +706,47 @@ func steal_targets_showing() -> bool:
 func get_steal_target_count() -> int:
 	return _steal_targets.size()
 
-func get_steal_target_ring_rect(index: int) -> Rect2:
-	if index >= 0 and index < _steal_ring_rects.size():
-		return _steal_ring_rects[index]
-	return Rect2()
+# Post-steal confirmation: the chooser's ring and tag drawn on the robbed
+# player's vertex for CONFIRM_DURATION seconds, then fading. Purely visual:
+# never clickable, no phase or input effect (the click paths use only
+# _steal_targets), and is_busy() stays true while it shows (as for the chooser).
+func show_steal_confirmation(vertex_id: int, color: Color, label: String) -> void:
+	if vertex_id < 0 or state == null:
+		return
+	_steal_confirm = [{"vertex": vertex_id, "color": color, "label": label, "age": 0.0}]
+	_compute_confirm_layout()
+	queue_redraw()
 
-func get_steal_target_tag_rect(index: int) -> Rect2:
-	if index >= 0 and index < _steal_tag_rects.size():
-		return _steal_tag_rects[index]
-	return Rect2()
+func steal_confirm_showing() -> bool:
+	return not _steal_confirm.is_empty()
 
-func _steal_ring_radius(hex_radius: float) -> float:
-	return maxf(hex_radius * 0.30, 24.0)
+func get_steal_confirm_ring_rect() -> Rect2:
+	return _confirm_ring_rects[0] if not _confirm_ring_rects.is_empty() else Rect2()
+
+func get_steal_confirm_tag_rect() -> Rect2:
+	return _confirm_tag_rects[0] if not _confirm_tag_rects.is_empty() else Rect2()
+
+func clear_steal_confirmation() -> void:
+	if _steal_confirm.is_empty():
+		return
+	_steal_confirm = []
+	_confirm_ring_rects.clear()
+	_confirm_tag_rects.clear()
+	queue_redraw()
+
+func _compute_confirm_layout() -> void:
+	_confirm_ring_rects.clear()
+	_confirm_tag_rects.clear()
+	var tile := int(state.blocker_tile) if state != null else -1
+	_compute_layout_for(_steal_confirm, tile, _confirm_ring_rects, _confirm_tag_rects)
 
 func _compute_steal_layout() -> void:
 	_steal_ring_rects.clear()
 	_steal_tag_rects.clear()
-	if _steal_targets.is_empty() or state == null:
+	_compute_layout_for(_steal_targets, _steal_pending_tile, _steal_ring_rects, _steal_tag_rects)
+
+func _compute_layout_for(targets: Array, pending_tile: int, ring_rects: Array[Rect2], tag_rects: Array[Rect2]) -> void:
+	if targets.is_empty() or state == null:
 		return
 	var topo := HexMath.get_topology()
 	var hex_radius := _get_hex_radius()
@@ -712,20 +754,20 @@ func _compute_steal_layout() -> void:
 	var fs := int(clampf(hex_radius * 0.24, 10.0, 15.0))
 	var board_center := size * 0.5
 	var tile_center: Vector2 = board_center
-	if _steal_pending_tile >= 0 and _steal_pending_tile < topo.tile_centers.size():
-		tile_center = _unit_to_screen(topo.tile_centers[_steal_pending_tile], hex_radius)
+	if pending_tile >= 0 and pending_tile < topo.tile_centers.size():
+		tile_center = _unit_to_screen(topo.tile_centers[pending_tile], hex_radius)
 	var occupied: Array[Rect2] = []
-	for t in _steal_targets:
+	for t in targets:
 		var td: Dictionary = t
 		var v_id := int(td.get("vertex", -1))
 		if v_id < 0 or v_id >= topo.vertex_positions.size():
-			_steal_ring_rects.append(Rect2())
-			_steal_tag_rects.append(Rect2())
+			ring_rects.append(Rect2())
+			tag_rects.append(Rect2())
 			continue
 		var vp := _unit_to_screen(topo.vertex_positions[v_id], hex_radius)
 		var r := _steal_ring_radius(hex_radius)
 		var ring_rect := Rect2(vp - Vector2(r, r), Vector2(r * 2.0, r * 2.0))
-		_steal_ring_rects.append(ring_rect)
+		ring_rects.append(ring_rect)
 		occupied.append(ring_rect.grow(2.0))
 		var label := str(td.get("label", ""))
 		var ts := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs) if font != null else Vector2(60, 14)
@@ -758,7 +800,7 @@ func _compute_steal_layout() -> void:
 						break
 				if hits:
 					continue
-				_steal_tag_rects.append(tag_rect)
+				tag_rects.append(tag_rect)
 				occupied.append(tag_rect.grow(2.0))
 				placed = true
 				break
@@ -769,8 +811,21 @@ func _compute_steal_layout() -> void:
 			var rect2 := Rect2(center2 - tag_size * 0.5, tag_size).intersection(board_rect)
 			if rect2.size.x < 10.0 or rect2.size.y < 10.0:
 				rect2 = Rect2(center2, tag_size)
-			_steal_tag_rects.append(rect2)
+			tag_rects.append(rect2)
 			occupied.append(rect2)
+
+func get_steal_target_ring_rect(index: int) -> Rect2:
+	if index >= 0 and index < _steal_ring_rects.size():
+		return _steal_ring_rects[index]
+	return Rect2()
+
+func get_steal_target_tag_rect(index: int) -> Rect2:
+	if index >= 0 and index < _steal_tag_rects.size():
+		return _steal_tag_rects[index]
+	return Rect2()
+
+func _steal_ring_radius(hex_radius: float) -> float:
+	return maxf(hex_radius * 0.30, 24.0)
 
 func _steal_target_at(pos: Vector2) -> int:
 	var hex_radius := _get_hex_radius()
@@ -785,47 +840,57 @@ func _steal_target_at(pos: Vector2) -> int:
 	return -1
 
 func _draw_steal_targets(topo: HexMath.BoardTopology, hex_radius: float, font: Font, pulse: float) -> void:
-	if _steal_targets.is_empty():
+	if _steal_targets.is_empty() and _steal_confirm.is_empty():
 		return
 	var amp := 0.0 if reduce_motion else pulse
-	var r0 := _steal_ring_radius(hex_radius)
 	var fs := int(clampf(hex_radius * 0.24, 10.0, 15.0))
 	for i in range(_steal_targets.size()):
-		var td: Dictionary = _steal_targets[i]
 		if i >= _steal_ring_rects.size() or _steal_ring_rects[i].size.x <= 0.0:
 			continue
-		var vp := _steal_ring_rects[i].get_center()
-		var col: Color = td.get("color", Palette.ACCENT_GOLD)
-		var hov := (_steal_hover == i)
-		if not reduce_motion:
-			draw_arc(vp, r0 + 8.0 + amp * 4.0, 0.0, TAU, 40, Color(col.r, col.g, col.b, 0.28 + 0.22 * amp), 2.0, true)
-		draw_arc(vp, r0 + 3.0 + amp * 2.0, 0.0, TAU, 40, Color(0.05, 0.04, 0.03, 0.9), 7.0, true)
-		var ring_col: Color = col.lightened(0.35) if hov else col
-		draw_arc(vp, r0 + amp * 2.0, 0.0, TAU, 40, ring_col, 4.0, true)
-		draw_circle(vp, r0 - 3.0, Color(col.r, col.g, col.b, 0.18))
-		var key := str(int(td.get("key", i + 1)))
-		if font != null:
-			var kts := font.get_string_size(key, HORIZONTAL_ALIGNMENT_CENTER, -1, fs + 2)
-			draw_circle(vp + Vector2(0, -r0 + 2.0), 9.0, Color(0.08, 0.06, 0.05, 0.92))
-			_sstr(
-				self, font,
-				vp + Vector2(0, -r0 + 2.0) + Vector2(-kts.x * 0.5, kts.y * 0.30),
-				key, HORIZONTAL_ALIGNMENT_CENTER, -1, fs + 2,
-				Color(1, 1, 1, 0.95)
-			)
-		if i < _steal_tag_rects.size():
-			var tag: Rect2 = _steal_tag_rects[i]
-			if tag.size.x > 8.0:
-				draw_rect(tag, Color(0.07, 0.05, 0.04, 0.94 if not hov else 0.99), true)
-				draw_rect(tag, col.lightened(0.2) if hov else col, false, 2.0)
-				var label := str(td.get("label", ""))
-				var lts := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs) if font != null else Vector2.ZERO
-				_sstr(
-					self, font,
-					tag.position + Vector2((tag.size.x - lts.x) * 0.5, (tag.size.y + lts.y * 0.62) * 0.5),
-					label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
-					Color(1, 1, 1, 1)
-				)
+		_draw_target_entry(_steal_targets[i], _steal_ring_rects[i], _steal_tag_rects[i] if i < _steal_tag_rects.size() else Rect2(), amp, 1.0, _steal_hover == i, true, font, fs)
+	for i in range(_steal_confirm.size()):
+		if i >= _confirm_ring_rects.size() or _confirm_ring_rects[i].size.x <= 0.0:
+			continue
+		var cd: Dictionary = _steal_confirm[i]
+		var age: float = float(cd.get("age", 0.0))
+		var alpha := 1.0
+		var fade_at := CONFIRM_DURATION * 0.7
+		if age > fade_at:
+			alpha = clampf(1.0 - (age - fade_at) / (CONFIRM_DURATION - fade_at), 0.0, 1.0)
+		_draw_target_entry(cd, _confirm_ring_rects[i], _confirm_tag_rects[i] if i < _confirm_tag_rects.size() else Rect2(), amp, alpha, false, false, font, fs)
+
+func _draw_target_entry(td: Dictionary, ring_rect: Rect2, tag_rect: Rect2, amp: float, alpha: float, hov: bool, show_key: bool, font: Font, fs: int) -> void:
+	var vp := ring_rect.get_center()
+	var r0 := _steal_ring_radius(_get_hex_radius())
+	var col: Color = td.get("color", Palette.ACCENT_GOLD)
+	if not reduce_motion:
+		draw_arc(vp, r0 + 8.0 + amp * 4.0, 0.0, TAU, 40, Color(col.r, col.g, col.b, (0.28 + 0.22 * amp) * alpha), 2.0, true)
+	draw_arc(vp, r0 + 3.0 + amp * 2.0, 0.0, TAU, 40, Color(0.05, 0.04, 0.03, 0.9 * alpha), 7.0, true)
+	var ring_col: Color = col.lightened(0.35) if hov else col
+	draw_arc(vp, r0 + amp * 2.0, 0.0, TAU, 40, Color(ring_col.r, ring_col.g, ring_col.b, alpha), 4.0, true)
+	draw_circle(vp, r0 - 3.0, Color(col.r, col.g, col.b, 0.18 * alpha))
+	var key := str(int(td.get("key", 0)))
+	if show_key and font != null and key != "0":
+		var kts := font.get_string_size(key, HORIZONTAL_ALIGNMENT_CENTER, -1, fs + 2)
+		draw_circle(vp + Vector2(0, -r0 + 2.0), 9.0, Color(0.08, 0.06, 0.05, 0.92 * alpha))
+		_sstr(
+			self, font,
+			vp + Vector2(0, -r0 + 2.0) + Vector2(-kts.x * 0.5, kts.y * 0.30),
+			key, HORIZONTAL_ALIGNMENT_CENTER, -1, fs + 2,
+			Color(1, 1, 1, 0.95 * alpha)
+		)
+	if tag_rect.size.x > 8.0:
+		draw_rect(tag_rect, Color(0.07, 0.05, 0.04, (0.94 if not hov else 0.99) * alpha), true)
+		var line_col: Color = col.lightened(0.2) if hov else col
+		draw_rect(tag_rect, Color(line_col.r, line_col.g, line_col.b, alpha), false, 2.0)
+		var label := str(td.get("label", ""))
+		var lts := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs) if font != null else Vector2.ZERO
+		_sstr(
+			self, font,
+			tag_rect.position + Vector2((tag_rect.size.x - lts.x) * 0.5, (tag_rect.size.y + lts.y * 0.62) * 0.5),
+			label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
+			Color(1, 1, 1, alpha)
+		)
 	# pending hex ghost keeps its own marker (main_ui); nothing else drawn here
 
 func _ensure_static_layers() -> void:

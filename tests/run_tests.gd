@@ -1481,6 +1481,15 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
 	], _test_sea_behind_top_bar_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_p42_transparent_animations_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+	], _test_p43_hand_flight_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -11840,3 +11849,705 @@ func _test_sea_behind_top_bar_body(ui: Node) -> void:
 	ui._menu_popup.hide()
 	await _ui_settle(2)
 	_pass_section("146. Sea Behind Top Bar Test (band paints nothing, sea continues to y = 0 full width behind the pill and the rounded sidebar corners, rects and hex centres locked in both styles and both sizes, band click inert, menu still works)")
+
+func _p42_flight_ignore_audit(ui: Node, tag: String, expect_nodes: int) -> void:
+	var seen := 0
+	var stack: Array = [ui._flight_layer]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for c in n.get_children():
+			if c is Control:
+				seen += 1
+				_assert(
+					(c as Control).mouse_filter == Control.MOUSE_FILTER_IGNORE,
+					"%s: flight node %s must be MOUSE_FILTER_IGNORE, got %d" % [tag, str(c.name), int((c as Control).mouse_filter)]
+				)
+			stack.append(c)
+	_assert(
+		seen >= expect_nodes,
+		"%s: the flight subtree has at least %d Controls to audit, got %d" % [tag, expect_nodes, seen]
+	)
+
+func _p42_clear_animations(ui: Node) -> bool:
+	var guard := 0
+	while guard < 900 and (ui._flight_layer.get_child_count() > 0 or ui._dice_show_active):
+		await process_frame
+		guard += 1
+	return guard < 900
+
+func _p42_roll_seed() -> int:
+	var r := RandomNumberGenerator.new()
+	for s in range(1, 200000):
+		r.seed = s
+		if r.randi_range(1, 6) + r.randi_range(1, 6) == 7:
+			return s
+	return -1
+
+func _p42_wipe_board_for_steal(ui: Node, tile: int, owner_pids: Array, hands: Dictionary) -> void:
+	var st = ui.session.state
+	for v in range(st.vertex_owner.size()):
+		st.vertex_owner[v] = -1
+		st.vertex_building[v] = GameTypes.BuildingType.NONE
+	st.blocker_tile = 5
+	for pid in range(st.players.size()):
+		var hand: Dictionary = st.players[pid]["hand"]
+		for r in GameTypes.ALL_RESOURCES:
+			hand[r] = int((hands.get(pid, {}) as Dictionary).get(r, 0))
+	var topo = HexMath.get_topology()
+	var free: Array = []
+	for v in topo.tile_vertices[tile]:
+		if int(st.vertex_owner[v]) == -1:
+			free.append(v)
+	for i in range(owner_pids.size()):
+		st.vertex_owner[int(free[i])] = int(owner_pids[i])
+
+func _p42_real_click(ui: Node, ctrl: Control) -> void:
+	var center: Vector2 = root.get_screen_transform() * (ctrl.get_global_transform() * (ctrl.size * 0.5))
+	await _p42_real_click_at(ui, center)
+
+func _p42_real_click_at(_ui: Node, pt: Vector2) -> void:
+	var mv := InputEventMouseMotion.new()
+	mv.position = pt
+	mv.global_position = pt
+	root.push_input(mv)
+	await _ui_settle(2)
+	var pe := InputEventMouseButton.new()
+	pe.button_index = MOUSE_BUTTON_LEFT
+	pe.pressed = true
+	pe.position = pt
+	pe.global_position = pt
+	root.push_input(pe)
+	await _ui_settle(2)
+	var re := InputEventMouseButton.new()
+	re.button_index = MOUSE_BUTTON_LEFT
+	re.pressed = false
+	re.position = pt
+	re.global_position = pt
+	root.push_input(re)
+
+func _p42_tile_pt(ui: Node, tile_id: int) -> Vector2:
+	return root.get_screen_transform() * (ui._board_view.global_position + ui._board_view.get_spot_screen_position("tile", tile_id))
+
+func _p42_reset_to_roll(ui: Node, st: GameState) -> void:
+	st.phase = GameTypes.TurnPhase.TURN_ROLL
+	st.current_player = 0
+	ui._refresh_ui()
+	await _ui_settle(3)
+
+func _p42_clear_toasts(ui: Node) -> void:
+	var guard := 0
+	while guard < 600 and not ui._toast_labels.is_empty():
+		await process_frame
+		guard += 1
+
+func _p42_toast_text(ui: Node) -> String:
+	var all := ""
+	for lbl in ui._toast_labels:
+		if is_instance_valid(lbl):
+			all += str((lbl as Label).text) + "|"
+	return all
+
+func _test_p42_transparent_animations_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	ui.auto_ai = false
+	if ui._splash_overlay != null and ui._splash_overlay.visible:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	_use_real_frame_rate()
+	ui._reduce_motion = false
+	if ui._dice_widget != null:
+		ui._dice_widget.set_motion_enabled(true)
+	await _ui_settle(4)
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(4811, seats, true, 0)
+	var st = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_ROLL
+	st.current_player = 0
+	ui._refresh_ui()
+	await _ui_settle(3)
+
+	# --- A1: the dice show copy never eats clicks --------------------------
+	_assert(
+		ui._dice_widget.mouse_filter == Control.MOUSE_FILTER_STOP,
+		"p42 A1: the real dice widget is STOP before the roll"
+	)
+	_assert(str(ui._dice_widget.tooltip_text) != "", "p42 A1: the real dice widget keeps its tooltip")
+	st.rng.seed = _p42_roll_seed()
+	await _p42_real_click(ui, ui._dice_widget)
+	await _ui_settle(3)
+	_assert(bool(ui._dice_show_active), "p42 A1: the dice show is alive after the real roll click")
+	_p42_flight_ignore_audit(ui, "A1 dice show", 1)
+	_assert(
+		ui._dice_widget.mouse_filter == Control.MOUSE_FILTER_STOP and str(ui._dice_widget.tooltip_text) == "Last Roll",
+		"p42 A1: the real dice widget stays STOP with its tooltip during the show"
+	)
+	await _p42_real_click(ui, ui._menu_btn)
+	await _ui_settle(3)
+	_assert(bool(ui._menu_popup.visible), "p42 A1: a real click opens the menu while the dice show is alive")
+	ui._menu_popup.hide()
+	await _ui_settle(2)
+
+	# --- A2: card flight nodes never eat clicks ----------------------------
+	var flyer: CardFace = ui._spawn_card_flyer(Vector2(100, 100), Vector2(600, 500), 0, 0.0, Callable())
+	_assert(flyer != null, "p42 A2: a card flight spawned")
+	_p42_flight_ignore_audit(ui, "A2 card flight", 2)
+	var ok := await _p42_clear_animations(ui)
+	_assert(ok, "p42: the dice show and the card flight retired (guard)")
+	if not ok:
+		return
+	_assert(ui._flight_layer.get_child_count() == 0, "p42 A2: the flight layer is empty again")
+	_assert(
+		ui._dice_widget.mouse_filter == Control.MOUSE_FILTER_STOP,
+		"p42 A1: the real dice widget is STOP again after the show"
+	)
+
+	# --- B: the Blocker move always shows what happened ---------------------
+	var seats3: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+	]
+	ui.session.start_match(4812, seats3, true, 0)
+	st = ui.session.state
+	await _p42_reset_to_roll(ui, st)
+
+	# B1: zero victims -> info toast, no steal, main phase
+	_p42_wipe_board_for_steal(ui, 2, [], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {}, 2: {}})
+	await _p42_reset_to_roll(ui, st)
+	st.rng.seed = _p42_roll_seed()
+	await _p42_real_click(ui, ui._dice_widget)
+	var cleared := await _p42_clear_animations(ui)
+	_assert(cleared, "p42 B1: the dice show retired")
+	_assert(int(st.phase) == int(GameTypes.TurnPhase.TURN_MOVE_BLOCKER), "p42 B1: reached TURN_MOVE_BLOCKER")
+	await _p42_real_click_at(ui, _p42_tile_pt(ui, 2))
+	await _ui_settle(4)
+	_assert(_p42_toast_text(ui).contains("Blocker moved — no one there to steal from."), "p42 B1: the zero-victim info toast shows: %s" % _p42_toast_text(ui))
+	_assert(st.last_steal.is_empty(), "p42 B1: no steal was recorded")
+	_assert(int(st.phase) == int(GameTypes.TurnPhase.TURN_MAIN), "p42 B1: the turn moved to MAIN")
+	await _p42_clear_toasts(ui)
+
+	# B2: one victim -> auto-steal keeps a confirmation ring + tag, input stays live
+	var topo := HexMath.get_topology()
+	_p42_wipe_board_for_steal(ui, 2, [1], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {GameTypes.ALL_RESOURCES[1]: 2}, 2: {}})
+	var victim_v: int = int(topo.tile_vertices[2][0])
+	await _p42_reset_to_roll(ui, st)
+	st.rng.seed = _p42_roll_seed()
+	await _p42_real_click(ui, ui._dice_widget)
+	cleared = await _p42_clear_animations(ui)
+	_assert(cleared, "p42 B2: the dice show retired")
+	await _p42_real_click_at(ui, _p42_tile_pt(ui, 2))
+	await _ui_settle(3)
+	_assert(bool(ui._board_view.steal_confirm_showing()), "p42 B2: the confirmation ring shows after the auto-steal")
+	_assert(bool(ui._board_view.is_busy()), "p42 B2: the board reports busy while the confirmation shows")
+	var conf_ring: Rect2 = ui._board_view.get_steal_confirm_ring_rect()
+	var want_center: Vector2 = ui._board_view.get_spot_screen_position("vertex", victim_v)
+	_assert(
+		conf_ring.size.x > 0.0 and conf_ring.get_center().distance_to(want_center) < 0.5,
+		"p42 B2: the confirmation ring sits on the victim's vertex (%s vs %s)" % [str(conf_ring.get_center()), str(want_center)]
+	)
+	var conf_tag: Rect2 = ui._board_view.get_steal_confirm_tag_rect()
+	_assert(conf_tag.size.x > 20.0 and conf_tag.size.y > 8.0, "p42 B2: the confirmation tag has a rect: %s" % str(conf_tag))
+	# input is accepted while it shows: a real hand-card click opens the trade tray
+	await _p42_real_click(ui, ui._res_card_refs[GameTypes.ALL_RESOURCES[0]])
+	await _ui_settle(3)
+	_assert(bool(ui._trade_tray.visible), "p42 B2: a hand-card click works while the confirmation shows")
+	if bool(ui._trade_tray.visible):
+		ui._toggle_trade_tray()
+		await _ui_settle(2)
+	var gone := false
+	var g2 := 0
+	while g2 < 200 and not gone:
+		await process_frame
+		gone = not bool(ui._board_view.steal_confirm_showing())
+		g2 += 1
+	_assert(gone and g2 > 40, "p42 B2: the confirmation faded within ~1.2 s (frames %d)" % g2)
+	_assert(st.last_steal.size() > 0, "p42 B2: the steal was recorded")
+	_assert(_p42_toast_text(ui).contains("You stole 1"), "p42 B2: the steal toast shows alongside")
+	await _p42_clear_toasts(ui)
+
+	# B3: two victims -> pick one in the chooser, the same confirmation lands on the picked player
+	_p42_wipe_board_for_steal(ui, 2, [1, 2], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {GameTypes.ALL_RESOURCES[1]: 2}, 2: {GameTypes.ALL_RESOURCES[2]: 1}})
+	await _p42_reset_to_roll(ui, st)
+	st.rng.seed = _p42_roll_seed()
+	await _p42_real_click(ui, ui._dice_widget)
+	cleared = await _p42_clear_animations(ui)
+	_assert(cleared, "p42 B3: the dice show retired")
+	await _p42_real_click_at(ui, _p42_tile_pt(ui, 2))
+	await _ui_settle(3)
+	_assert(ui._board_view.get_steal_target_count() == 2, "p42 B3: the chooser shows two rings")
+	var ring0: Rect2 = ui._board_view.get_steal_target_ring_rect(0)
+	var picked_pid: int = int(((ui._board_view._steal_targets[0]) as Dictionary).get("pid", -1))
+	var gp0: Vector2 = root.get_screen_transform() * (ui._board_view.global_position + ring0.get_center())
+	await _p42_real_click_at(ui, gp0)
+	await _ui_settle(3)
+	_assert(bool(ui._board_view.steal_confirm_showing()), "p42 B3: the confirmation shows after picking a victim")
+	conf_ring = ui._board_view.get_steal_confirm_ring_rect()
+	var picked_v := -1
+	for v in topo.tile_vertices[2]:
+		if int(st.vertex_owner[v]) == picked_pid:
+			picked_v = int(v)
+	var picked_center: Vector2 = ui._board_view.get_spot_screen_position("vertex", picked_v)
+	_assert(
+		conf_ring.size.x > 0.0 and conf_ring.get_center().distance_to(picked_center) < 0.5,
+		"p42 B3: the confirmation lands on the picked player's vertex"
+	)
+	var g3 := 0
+	while g3 < 200 and bool(ui._board_view.steal_confirm_showing()):
+		await process_frame
+		g3 += 1
+	_assert(not bool(ui._board_view.steal_confirm_showing()), "p42 B3: the confirmation faded")
+	await _p42_clear_toasts(ui)
+
+	# a BOT's zero-victim move must not raise the human's info toast
+	_p42_wipe_board_for_steal(ui, 2, [1], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {GameTypes.ALL_RESOURCES[0]: 2}, 2: {}})
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 1
+	ui._refresh_ui()
+	await _ui_settle(2)
+	ui.session.step_ai()
+	await _ui_settle(3)
+	_assert(
+		not _p42_toast_text(ui).contains("no one there to steal from"),
+		"p42 B1: a bot's steal-less move shows no info toast: %s" % _p42_toast_text(ui)
+	)
+	await _p42_clear_toasts(ui)
+
+	# reduce motion: the confirmation exists (no pulse: the board's drawing gate
+	# is exactly reduce_motion), without any dice show
+	ui._reduce_motion = true
+	ui._board_view.reduce_motion = true
+	ui._dice_widget.set_motion_enabled(false)
+	await _ui_settle(2)
+	_p42_wipe_board_for_steal(ui, 2, [1], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {GameTypes.ALL_RESOURCES[1]: 2}, 2: {}})
+	await _p42_reset_to_roll(ui, st)
+	st.rng.seed = _p42_roll_seed()
+	await _p42_real_click(ui, ui._dice_widget)
+	await _ui_settle(3)
+	_assert(not bool(ui._dice_show_active), "p42: reduce motion skips the dice show")
+	_assert(int(st.phase) == int(GameTypes.TurnPhase.TURN_MOVE_BLOCKER), "p42: reduce motion reached MOVE_BLOCKER")
+	await _p42_real_click_at(ui, _p42_tile_pt(ui, 2))
+	await _ui_settle(3)
+	_assert(bool(ui._board_view.steal_confirm_showing()), "p42: reduce motion still shows the confirmation")
+	_assert(bool(ui._board_view.reduce_motion), "p42: the board's pulse gate stays off while the confirmation shows")
+	var g4 := 0
+	while g4 < 200 and bool(ui._board_view.steal_confirm_showing()):
+		await process_frame
+		g4 += 1
+	_assert(not bool(ui._board_view.steal_confirm_showing()), "p42: the reduce-motion confirmation faded too")
+	ui._reduce_motion = false
+	ui._board_view.reduce_motion = false
+	if ui._dice_widget != null:
+		ui._dice_widget.set_motion_enabled(true)
+
+	# p42 follow-up: guard play with zero victims toasts too (guard moves the
+	# Blocker), and a REJECTED move must not toast.
+	await _p42_clear_toasts(ui)
+	_p42_wipe_board_for_steal(ui, 2, [], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {}, 2: {}})
+	st.players[0]["dev_cards"] = [GameTypes.DevCardType.GUARD]
+	await _p42_reset_to_roll(ui, st)
+	_assert(
+		not bool(ui._action_chips[GameTypes.DevCardType.GUARD].disabled),
+		"p42 follow-up: the Guard chip is playable on the human's roll phase"
+	)
+	await _p42_real_click(ui, ui._action_chips[GameTypes.DevCardType.GUARD])
+	await _ui_settle(3)
+	_assert(bool(ui._pending_guard_card), "p42 follow-up: clicking Guard arms the tile pick")
+	var steal_ser_before := int(st.last_steal.get("serial", 0))
+	await _p42_real_click_at(ui, _p42_tile_pt(ui, 2))
+	await _ui_settle(4)
+	_assert(int(st.blocker_tile) == 2, "p42 follow-up: the Guard move was accepted, Blocker is on tile 2")
+	_assert(int(st.last_steal.get("serial", 0)) == steal_ser_before, "p42 follow-up: the Guard move stole nothing")
+	_assert(
+		_p42_toast_text(ui).contains("Blocker moved — no one there to steal from."),
+		"p42 follow-up: Guard with zero victims shows the info toast: %s" % _p42_toast_text(ui)
+	)
+	await _p42_clear_toasts(ui)
+
+	# rejected move: force the current blocker tile into the highlight set and
+	# click it — the engine refuses ("different tile"), so no toast may appear
+	_p42_wipe_board_for_steal(ui, 2, [], {0: {GameTypes.ALL_RESOURCES[0]: 2}, 1: {}, 2: {}})
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 0
+	ui._refresh_ui()
+	await _ui_settle(3)
+	var force_tiles: Array[int] = [int(st.blocker_tile)]
+	ui._board_view.highlighted_tiles = force_tiles
+	await _p42_real_click_at(ui, _p42_tile_pt(ui, int(st.blocker_tile)))
+	await _ui_settle(4)
+	_assert(
+		not _p42_toast_text(ui).contains("no one there to steal from"),
+		"p42 follow-up: a rejected move shows no info toast: %s" % _p42_toast_text(ui)
+	)
+	_assert(int(st.phase) == int(GameTypes.TurnPhase.TURN_MOVE_BLOCKER), "p42 follow-up: the rejected move left the phase alone")
+	ui._update_mandatory_board_highlights(st, ui.session.get_acting_player_id(), true)
+	await _ui_settle(2)
+
+	_pass_section("147. Blocker Feedback & Transparent Animations Test (dice show copy and every flight node IGNORE for life, menu opens through a live show, dice widget keeps STOP + tooltip; zero-victim move and Guard toasts, one-victim and chooser steals land a fading confirmation ring + tag on the victim's vertex with input live, bots get no info toast, rejected moves stay silent, reduce motion keeps the ring without pulse)")
+
+func _p43_track_flight(ui: Node, res: int) -> Dictionary:
+	var out := {"found": false, "start": Vector2.INF, "end": Vector2.INF, "first_count": -1, "kind": ""}
+	var guard := 0
+	while guard < 900:
+		var fly: Variant = ui._steal_flyer
+		if fly != null and is_instance_valid(fly) and (fly as Control).is_visible_in_tree():
+			var c: Vector2 = (fly as Control).get_global_rect().get_center()
+			if not bool(out["found"]):
+				out["found"] = true
+				out["start"] = c
+				out["kind"] = str((fly as CardFace).kind)
+				var card: CardFace = ui._res_card_refs.get(res, null)
+				out["first_count"] = int(card.count) if card != null else -1
+			out["end"] = c
+		elif bool(out["found"]):
+			break
+		await process_frame
+		guard += 1
+	return out
+
+func _test_p43_hand_flight_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	ui.auto_ai = false
+	if ui._splash_overlay != null and ui._splash_overlay.visible:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	_use_real_frame_rate()
+	ui._reduce_motion = false
+	if ui._dice_widget != null:
+		ui._dice_widget.set_motion_enabled(true)
+	await _ui_settle(4)
+	var CLAY := GameTypes.ResourceType.CLAY
+	var IRON := GameTypes.ResourceType.IRON
+	var TIMBER := GameTypes.ResourceType.TIMBER
+	var seats3: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+	]
+	ui.session.start_match(4813, seats3, true, 0)
+	var st = ui.session.state
+	await _ui_settle(3)
+
+	# A) viewer is the VICTIM: the flight leaves the stolen card in the hand
+	# bar and its count drops at launch; the other end is the thief's row.
+	_p42_wipe_board_for_steal(ui, 2, [0], {0: {CLAY: 3}, 1: {TIMBER: 1}, 2: {}})
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 1
+	ui._refresh_ui()
+	await _ui_settle(3)
+	var clay: CardFace = ui._res_card_refs[CLAY]
+	_assert(int(clay.count) == 3, "p43 A: the clay card shows 3 before the steal")
+	ui.session.submit_action(1, GameAction.move_blocker(2, 0))
+	await _ui_settle(2)
+	_assert(int(clay.count) == 3, "p43 A: the hold keeps the card at 3 while the flight waits")
+	_assert(not ui._steal_pending_anim.is_empty() or is_instance_valid(ui._steal_flyer), "p43 A: the flight is armed")
+	var trA := await _p43_track_flight(ui, CLAY)
+	_assert(bool(trA["found"]), "p43 A: a flyer appeared")
+	if not bool(trA["found"]):
+		return
+	var clay_rect: Rect2 = clay.get_global_rect()
+	var cA: Vector2 = trA["start"]
+	_assert(
+		clay_rect.get_center().distance_to(cA) <= 4.0 or clay_rect.has_point(cA),
+		"p43 A: the flight starts on the viewer's clay card (start %s, card %s)" % [str(cA), str(clay_rect)]
+	)
+	_assert(str(trA["kind"]) == "resource", "p43 A: the victim sees the stolen face")
+	_assert(int(trA["first_count"]) == 2, "p43 A: the card count drops to 2 at launch, got %d" % int(trA["first_count"]))
+	var row1: Control = ui._scoreboard_row_panels.get(1)
+	_assert(
+		row1.get_global_rect().grow(12.0).has_point(trA["end"]),
+		"p43 A: the flight ends inside the thief's scoreboard row (end %s, row %s)" % [str(trA["end"]), str(row1.get_global_rect())]
+	)
+	_assert(int(clay.count) == 2, "p43 A: the clay card stays at 2 after the flight")
+
+	# B) viewer is the THIEF via real clicks: starts at the victim's scoreboard
+	# row, lands on the resource card in the hand bar; count rises only at landing.
+	_p42_wipe_board_for_steal(ui, 2, [1], {0: {TIMBER: 1}, 1: {IRON: 2}, 2: {}})
+	await _p42_reset_to_roll(ui, st)
+	st.rng.seed = _p42_roll_seed()
+	await _p42_real_click(ui, ui._dice_widget)
+	var okB := await _p42_clear_animations(ui)
+	_assert(okB and int(st.phase) == int(GameTypes.TurnPhase.TURN_MOVE_BLOCKER), "p43 B: the real 7 reached MOVE_BLOCKER")
+	var iron: CardFace = ui._res_card_refs[IRON]
+	_assert(int(iron.count) == 0, "p43 B: the iron card shows 0 before the steal")
+	await _p42_real_click_at(ui, _p42_tile_pt(ui, 2))
+	await _ui_settle(2)
+	_assert(
+		int(st.last_steal.get("thief", -1)) == 0 and int(st.last_steal.get("victim", -1)) == 1,
+		"p43 B: the human stole from Dune via real clicks"
+	)
+	var trB := await _p43_track_flight(ui, IRON)
+	_assert(bool(trB["found"]), "p43 B: a flyer appeared")
+	if not bool(trB["found"]):
+		return
+	var row1b: Control = ui._scoreboard_row_panels.get(1)
+	_assert(
+		row1b.get_global_rect().grow(14.0).has_point(trB["start"]),
+		"p43 B: the flight starts on the victim's scoreboard row (start %s)" % str(trB["start"])
+	)
+	_assert(int(trB["first_count"]) == 0, "p43 B: the iron count does not rise while the card is in flight")
+	var iron_rect: Rect2 = iron.get_global_rect()
+	var cB: Vector2 = trB["end"]
+	_assert(
+		iron_rect.get_center().distance_to(cB) <= 4.0 or iron_rect.has_point(cB),
+		"p43 B: the flight lands on the viewer's iron card (end %s, card %s)" % [str(cB), str(iron_rect)]
+	)
+	await _ui_settle(2)
+	_assert(int(iron.count) == 1, "p43 B: the iron card rises to 1 at landing")
+
+	# C) hot-seat with the hand hidden: scoreboard to scoreboard, face down.
+	var seats_hot: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.HUMAN, "Ivory"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Dune"),
+	]
+	ui.session.start_match(4815, seats_hot, true, 0)
+	ui._last_steal_serial = 0
+	st = ui.session.state
+	await _ui_settle(3)
+	_p42_wipe_board_for_steal(ui, 2, [0], {0: {CLAY: 2}, 1: {TIMBER: 1}, 2: {}})
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 2
+	ui._refresh_ui()
+	await _ui_settle(3)
+	_assert(bool(ui._hand_hidden()), "p43 C: the hot-seat hand is hidden while the bot acts")
+	ui.session.submit_action(2, GameAction.move_blocker(2, 0))
+	var trC := await _p43_track_flight(ui, CLAY)
+	_assert(bool(trC["found"]), "p43 C: a flyer appeared")
+	if bool(trC["found"]):
+		_assert(str(trC["kind"]) == "back", "p43 C: the hidden-hand flight shows a card back")
+		var row0: Control = ui._scoreboard_row_panels.get(0)
+		var row2: Control = ui._scoreboard_row_panels.get(2)
+		_assert(
+			row0.get_global_rect().grow(14.0).has_point(trC["start"]),
+			"p43 C: a hidden hand is no start point (start %s, row %s)" % [str(trC["start"]), str(row0.get_global_rect())]
+		)
+		_assert(
+			row2.get_global_rect().grow(14.0).has_point(trC["end"]),
+			"p43 C: the flight ends on the thief's scoreboard row (end %s)" % str(trC["end"])
+		)
+
+	# D) match review mode: no flight at all.
+	ui.session.start_match(4816, seats3, true, 0)
+	ui._last_steal_serial = 0
+	st = ui.session.state
+	await _ui_settle(3)
+	_p42_wipe_board_for_steal(ui, 2, [0], {0: {CLAY: 2}, 1: {TIMBER: 1}, 2: {}})
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 1
+	ui._refresh_ui()
+	await _ui_settle(3)
+	ui._review_active = true
+	ui.session.submit_action(1, GameAction.move_blocker(2, 0))
+	var trD := await _p43_track_flight(ui, CLAY)
+	_assert(not bool(trD["found"]), "p43 D: review mode flies nothing")
+	_assert(ui._steal_pending_anim.is_empty(), "p43 D: review mode arms no flight")
+	_assert(int(st.blocker_tile) == 2, "p43 D: the steal still happened in the session")
+	ui._review_active = false
+
+	# E) an unresolvable hand card falls back to the scoreboard row, never (0,0)
+	ui.session.start_match(4817, seats3, true, 0)
+	ui._last_steal_serial = 0
+	st = ui.session.state
+	await _ui_settle(3)
+	_p42_wipe_board_for_steal(ui, 2, [0], {0: {CLAY: 3}, 1: {TIMBER: 1}, 2: {}})
+	st.phase = GameTypes.TurnPhase.TURN_MOVE_BLOCKER
+	st.current_player = 1
+	ui._refresh_ui()
+	await _ui_settle(3)
+	var clayE: CardFace = ui._res_card_refs[CLAY]
+	var size_before: Vector2 = clayE.size
+	var min_before: Vector2 = clayE.custom_minimum_size
+	clayE.custom_minimum_size = Vector2.ZERO
+	clayE.size = Vector2.ZERO
+	_assert(ui._hand_card_center_ui(CLAY) == Vector2.INF, "p43 E: a zero-size card resolves to no anchor")
+	clayE.custom_minimum_size = min_before
+	clayE.size = size_before
+	clayE.visible = false
+	ui.session.submit_action(1, GameAction.move_blocker(2, 0))
+	var trE := await _p43_track_flight(ui, CLAY)
+	_assert(bool(trE["found"]), "p43 E: the fallback flight still launched")
+	if bool(trE["found"]):
+		var row0e: Control = ui._scoreboard_row_panels.get(0)
+		_assert(
+			row0e.get_global_rect().grow(14.0).has_point(trE["start"]),
+			"p43 E: the fallback starts on the viewer's scoreboard row (start %s)" % str(trE["start"])
+		)
+		_assert((trE["start"] as Vector2).distance_to(Vector2.ZERO) > 40.0, "p43 E: never fly from (0,0)")
+	clayE.visible = true
+	ui._refresh_ui()
+	await _ui_settle(2)
+
+	# ---- p43r: the same launch point holds when the steal comes from REAL AI
+	# stepping (BotController decides every bot action; no direct bot submits).
+	var p43r_seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_MEDIUM, "Riven"),
+	]
+	# T1 (R1): a bot rolls 7 (seed 9) and robs the human through the normal
+	# roll -> blocker slide -> steal -> flight path.
+	ui.session.start_match(4820, p43r_seats, true, 0)
+	ui._last_steal_serial = 0
+	st = ui.session.state
+	await _ui_settle(3)
+	_p43r_wipe(ui, [[0, 2]], {0: {TIMBER: 2, CLAY: 2}, 1: {IRON: 2}, 2: {TIMBER: 1}, 3: {CLAY: 1}})
+	st.phase = GameTypes.TurnPhase.TURN_ROLL
+	st.current_player = 1
+	st.rng.seed = 9
+	var p43r_t1: Dictionary = await _p43r_step_until_flights(ui, 1)
+	_assert(bool(p43r_t1["found1"]), "p43r T1: the real-AI steal launched a flight")
+	if bool(p43r_t1["found1"]):
+		_assert(bool(p43r_t1["inside1"]), "p43r T1: the flight starts on the viewer's hand card (start %s res %d)" % [str(p43r_t1["c1"]), int(p43r_t1["res1"])])
+
+	# T2 (R2): the human must discard first (9 cards), then the same bot robs.
+	ui.session.start_match(4820, p43r_seats, true, 0)
+	ui._last_steal_serial = 0
+	st = ui.session.state
+	await _ui_settle(3)
+	_p43r_wipe(ui, [[0, 2]], {0: {TIMBER: 3, CLAY: 3, IRON: 1, GameTypes.ResourceType.FLEECE: 2}, 1: {IRON: 2}, 2: {TIMBER: 1}, 3: {CLAY: 1}})
+	st.phase = GameTypes.TurnPhase.TURN_ROLL
+	st.current_player = 1
+	st.rng.seed = 9
+	var p43r_t2: Dictionary = await _p43r_step_until_flights(ui, 1)
+	_assert(bool(p43r_t2["discarded"]), "p43r T2: the human's forced discard ran before the rob")
+	_assert(bool(p43r_t2["found1"]), "p43r T2: the steal after the discard launched a flight")
+	if bool(p43r_t2["found1"]):
+		_assert(bool(p43r_t2["inside1"]), "p43r T2: the post-discard flight still starts on the hand card (start %s)" % str(p43r_t2["c1"]))
+
+	# T3 (R4): a bot plays its Guard card instead of rolling and robs the human.
+	ui.session.start_match(4820, p43r_seats, true, 0)
+	ui._last_steal_serial = 0
+	st = ui.session.state
+	await _ui_settle(3)
+	_p43r_wipe(ui, [[0, 2]], {0: {TIMBER: 2, CLAY: 2}, 1: {IRON: 2}, 2: {TIMBER: 1}, 3: {CLAY: 1}})
+	st.players[1]["dev_cards"] = [GameTypes.DevCardType.GUARD]
+	st.phase = GameTypes.TurnPhase.TURN_ROLL
+	st.current_player = 1
+	var p43r_t3: Dictionary = await _p43r_step_until_flights(ui, 1)
+	_assert(bool(p43r_t3["found1"]), "p43r T3: the Guard play launched a steal flight")
+	if bool(p43r_t3["found1"]):
+		_assert(bool(p43r_t3["inside1"]), "p43r T3: the Guard-flight starts on the hand card (start %s)" % str(p43r_t3["c1"]))
+
+	# T4 (R5+R7): consecutive 7s rob the human twice in a row; each flight (the
+	# second one may take the LAST card of its resource) lifts off the hand card.
+	ui.session.start_match(4820, p43r_seats, true, 0)
+	ui._last_steal_serial = 0
+	st = ui.session.state
+	await _ui_settle(3)
+	_p43r_wipe(ui, [[0, 2], [0, 4]], {0: {TIMBER: 2, CLAY: 1, IRON: 1}, 1: {IRON: 2}, 2: {TIMBER: 2}, 3: {CLAY: 1}})
+	st.phase = GameTypes.TurnPhase.TURN_ROLL
+	st.current_player = 1
+	st.rng.seed = 9
+	var p43r_t4: Dictionary = await _p43r_step_until_flights(ui, 2)
+	_assert(bool(p43r_t4["found1"]) and bool(p43r_t4["found2"]), "p43r T4: two consecutive bot turns each rob the human (flights %d)" % int(p43r_t4["seen"]))
+	if bool(p43r_t4["found1"]):
+		_assert(bool(p43r_t4["inside1"]), "p43r T4: the first rob starts on the hand card (start %s)" % str(p43r_t4["c1"]))
+	if bool(p43r_t4["found2"]):
+		_assert(bool(p43r_t4["inside2"]), "p43r T4: the second rob starts on the hand card (start %s)" % str(p43r_t4["c2"]))
+
+	# T5 (R6): an unanswered open offer parks every bot (acting player = the
+	# human), so a roll/rob can never overlap an open offer, and the hand bar
+	# cannot be swapped for the trade tray on an enemy turn.
+	ui.session.start_match(4820, p43r_seats, true, 0)
+	ui._last_steal_serial = 0
+	st = ui.session.state
+	await _ui_settle(3)
+	_p43r_wipe(ui, [[0, 2]], {0: {TIMBER: 2, CLAY: 2}, 1: {IRON: 2}, 2: {TIMBER: 1}, 3: {CLAY: 1}})
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = 1
+	ui.session.submit_action(1, GameAction.open_trade({IRON: 1}, {CLAY: 1}))
+	var p43r_g := 0
+	while ui.session.is_ai_to_act() and p43r_g < 30:
+		ui.session.step_ai()
+		p43r_g += 1
+	_assert(not ui.session.is_ai_to_act(), "p43r T5: once the bots answered, the offer waits on the human and no bot can roll or rob")
+	_assert(ui._hand_card_center_ui(CLAY) != Vector2.INF, "p43r T5: the hand anchor stays resolvable while an offer waits")
+	ui.session.submit_action(1, GameAction.cancel_open_trade())
+	_assert(ui.session.is_ai_to_act(), "p43r T5: the bots resume the moment the offer is gone")
+
+	_pass_section("148. Stolen Card Hand Flight Test (victim-viewer flight lifts off the stolen hand card with the count dropping at launch into the thief's row, thief-viewer flight lands on the resource card rising at landing, hidden-hand hot-seat and review stay scoreboard-only and face down, an unresolvable hand falls back to the scoreboard row never (0,0), and the hand-card launch also holds when the rob arrives through real AI stepping: plain 7, discard first, Guard play, consecutive double rob)")
+
+func _p43r_wipe(ui: Node, owner_tiles: Array, hands: Dictionary) -> void:
+	var st = ui.session.state
+	for v in range(st.vertex_owner.size()):
+		st.vertex_owner[v] = -1
+		st.vertex_building[v] = GameTypes.BuildingType.NONE
+	st.blocker_tile = 5
+	for pid in range(st.players.size()):
+		var hand: Dictionary = st.players[pid]["hand"]
+		for r in GameTypes.ALL_RESOURCES:
+			hand[r] = int((hands.get(pid, {}) as Dictionary).get(r, 0))
+	var topo = HexMath.get_topology()
+	for pair in owner_tiles:
+		var tile_id: int = int(pair[1])
+		var free: Array = []
+		for v in topo.tile_vertices[tile_id]:
+			if int(st.vertex_owner[v]) == -1:
+				free.append(v)
+		st.vertex_owner[int(free[0])] = int(pair[0])
+
+func _p43r_pick_discard(st, req: int) -> Dictionary:
+	var out := {}
+	var left := req
+	var guard := 0
+	while left > 0 and guard < 200:
+		guard += 1
+		for r in GameTypes.ALL_RESOURCES:
+			var have: int = int((st.players[0]["hand"] as Dictionary).get(r, 0)) - int(out.get(r, 0))
+			if have > 0:
+				out[r] = int(out.get(r, 0)) + 1
+				left -= 1
+				break
+	return out
+
+func _p43r_step_until_flights(ui: Node, want: int) -> Dictionary:
+	var out := {
+		"found1": false, "c1": Vector2.INF, "inside1": false, "res1": -1,
+		"found2": false, "c2": Vector2.INF, "inside2": false, "res2": -1,
+		"discarded": false, "seen": 0,
+	}
+	var st = ui.session.state
+	var settle := 0
+	while (ui._steal_anim_active() or ui._dice_show_active) and settle < 600:
+		settle += 1
+		await process_frame
+	var was := false
+	var seen := 0
+	var guard := 0
+	while guard < 2400 and seen < want:
+		guard += 1
+		var fly: Variant = ui._steal_flyer
+		var vis: bool = fly != null and is_instance_valid(fly) and (fly as Control).is_visible_in_tree()
+		if vis and not was:
+			seen += 1
+			var c: Vector2 = (fly as Control).get_global_rect().get_center()
+			var res: int = int(st.last_steal.get("res", -1))
+			var vic: int = int(st.last_steal.get("victim", -1))
+			var card: CardFace = ui._res_card_refs.get(res, null)
+			var inside: bool = card != null and vic == int(ui._view_pid()) and card.get_global_rect().grow(24.0).has_point(c)
+			if seen == 1:
+				out["found1"] = true
+				out["c1"] = c
+				out["inside1"] = inside
+				out["res1"] = res
+			elif seen == 2:
+				out["found2"] = true
+				out["c2"] = c
+				out["inside2"] = inside
+				out["res2"] = res
+		was = vis
+		if seen < want and not vis and not ui._steal_anim_active() and not ui._dice_show_active:
+			if ui.session.is_ai_to_act():
+				ui.session.step_ai()
+			else:
+				var pd: Dictionary = st.pending_discards
+				if pd.has(0) and int(pd[0]) > 0:
+					ui.session.submit_action(0, GameAction.discard_resources(_p43r_pick_discard(st, int(pd[0]))))
+					out["discarded"] = true
+		await process_frame
+	out["seen"] = seen
+	return out
