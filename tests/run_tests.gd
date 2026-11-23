@@ -1465,6 +1465,12 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
 		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
 	], _test_controls_batch_c_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_bank_trade_plan_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -11428,3 +11434,154 @@ func _test_controls_batch_c_body(ui: Node) -> void:
 	await _p37c_steal_prompt_checks(ui, "live")
 	_assert(Palette.current_style == "paper", "the batch C controls test ends on paper")
 	_pass_section("143. Audit Controls Batch C Test (checkbox states and icons, button icons, dropdown arrows and marks, review bar, root theme, replays scrim, steal prompt, both styles)")
+
+
+# --- 144: port/bank trade button for mixed selections (bug report) -------------
+func _p38_sides(ui: Node, give: Dictionary, get_d: Dictionary) -> void:
+	for r in GameTypes.ALL_RESOURCES:
+		ui._trade_give_counts[r] = int(give.get(r, 0))
+		ui._trade_get_counts[r] = int(get_d.get(r, 0))
+	ui._refresh_ui()
+	await _ui_settle(2)
+
+func _p38_hand(ui: Node, set_map: Dictionary) -> void:
+	var hand: Dictionary = ui.session.state.players[0]["hand"]
+	for r in GameTypes.ALL_RESOURCES:
+		hand[r] = int(set_map.get(r, 0))
+	ui._refresh_ui()
+	await _ui_settle(2)
+
+func _test_bank_trade_plan_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	ui.auto_ai = false
+	if ui._splash_overlay != null:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	await _ui_settle(4)
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(4811, seats, true, 0)
+	var ok := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return st.turn_number >= 2 and st.phase == GameTypes.TurnPhase.TURN_MAIN and st.current_player == 0 and not ui.session.is_ai_to_act() and st.open_trade.is_empty()
+	)
+	_assert(ok, "p38: reached the human's main phase")
+	if not ok:
+		return
+	await _ui_settle(3)
+	var st: GameState = ui.session.state
+	for v in range(st.vertex_owner.size()):
+		if int(st.vertex_owner[v]) == 0:
+			st.vertex_building[v] = GameTypes.BuildingType.NONE
+	var v_timber := -1
+	for v in range(st.vertex_ports.size()):
+		if int(st.vertex_ports[v]) == GameTypes.PortType.TIMBER_2_TO_1:
+			v_timber = v
+			break
+	_assert(v_timber != -1, "p38: the board has a Timber 2:1 port")
+	st.vertex_owner[v_timber] = 0
+	st.vertex_building[v_timber] = GameTypes.BuildingType.SETTLEMENT
+	_assert(st.get_trade_ratio(0, GameTypes.ResourceType.TIMBER) == 2, "p38: the owned Timber port gives 2:1")
+	_assert(st.get_trade_ratio(0, GameTypes.ResourceType.CLAY) == 4, "p38: Clay still trades 4:1")
+	for r in [GameTypes.ResourceType.GRAIN, GameTypes.ResourceType.IRON]:
+		st.bank[r] = int(st.bank.get(r, 0)) + 10
+	if not bool(ui._trade_tray.visible):
+		ui._toggle_trade_tray()
+	_assert(bool(ui._trade_tray.visible), "p38: the trade tray is open")
+
+	# (1) 4 Timber for 1 Grain + 1 Iron with everything done by real input events
+	await _p38_hand(ui, {GameTypes.ResourceType.TIMBER: 4})
+	for i in range(4):
+		_ui_real_click(ui._res_card_refs[GameTypes.ResourceType.TIMBER])
+		await _ui_settle(1)
+	_ui_real_click(ui._trade_get_faces[GameTypes.ResourceType.GRAIN])
+	_ui_real_click(ui._trade_get_faces[GameTypes.ResourceType.IRON])
+	await _ui_settle(2)
+	_assert(int(ui._trade_give_counts.get(GameTypes.ResourceType.TIMBER, 0)) == 4, "p38: four Timber selected by clicks")
+	_assert(bool(ui._trade_ratio_btn.visible), "p38: mixed get side must still show the bank/port button")
+	_assert(str(ui._trade_ratio_btn.text) == "Port 2:1", "p38: single-ratio wording stays 'Port 2:1' (got %s)" % str(ui._trade_ratio_btn.text))
+	var plan: Dictionary = ui._bank_selection_check(st, 0)
+	var swaps: Array = plan.get("swaps", [])
+	_assert(swaps.size() == 2, "p38: the plan has one swap per card received")
+	_assert(int(swaps[0]["give_res"]) == GameTypes.ResourceType.TIMBER and int(swaps[0]["get_res"]) == GameTypes.ResourceType.GRAIN, "p38: first swap is Timber for the lowest get id")
+	_assert(int(swaps[1]["get_res"]) == GameTypes.ResourceType.IRON, "p38: second swap takes the next get card")
+	var hb: Dictionary = st.players[0]["hand"].duplicate()
+	var bb: Dictionary = st.bank.duplicate()
+	_ui_real_click(ui._trade_ratio_btn)
+	await _ui_settle(2)
+	var hand: Dictionary = st.players[0]["hand"]
+	_assert(int(hand.get(GameTypes.ResourceType.TIMBER, 0)) == int(hb.get(GameTypes.ResourceType.TIMBER, 0)) - 4, "p38: four Timber left the hand")
+	_assert(int(hand.get(GameTypes.ResourceType.GRAIN, 0)) == int(hb.get(GameTypes.ResourceType.GRAIN, 0)) + 1, "p38: one Grain arrived")
+	_assert(int(hand.get(GameTypes.ResourceType.IRON, 0)) == int(hb.get(GameTypes.ResourceType.IRON, 0)) + 1, "p38: one Iron arrived")
+	_assert(int(st.bank.get(GameTypes.ResourceType.TIMBER, 0)) == int(bb.get(GameTypes.ResourceType.TIMBER, 0)) + 4, "p38: the bank gained the Timber")
+	_assert(int(st.bank.get(GameTypes.ResourceType.GRAIN, 0)) == int(bb.get(GameTypes.ResourceType.GRAIN, 0)) - 1, "p38: the bank lost the Grain")
+	_assert(int(st.bank.get(GameTypes.ResourceType.IRON, 0)) == int(bb.get(GameTypes.ResourceType.IRON, 0)) - 1, "p38: the bank lost the Iron")
+	var cleared := true
+	for r in GameTypes.ALL_RESOURCES:
+		if int(ui._trade_give_counts.get(r, 0)) > 0 or int(ui._trade_get_counts.get(r, 0)) > 0:
+			cleared = false
+	_assert(cleared, "p38: the selection is cleared after the trade")
+
+	# (2) the plain 2:1 case still works
+	await _p38_hand(ui, {GameTypes.ResourceType.TIMBER: 2})
+	await _p38_sides(ui, {GameTypes.ResourceType.TIMBER: 2}, {GameTypes.ResourceType.IRON: 1})
+	_assert(bool(ui._trade_ratio_btn.visible), "p38: 2 Timber for 1 Iron shows the button")
+	_assert(str(ui._trade_ratio_btn.text) == "Port 2:1", "p38: the plain port keeps its wording")
+	hb = st.players[0]["hand"].duplicate()
+	_ui_real_click(ui._trade_ratio_btn)
+	await _ui_settle(2)
+	hand = st.players[0]["hand"]
+	_assert(int(hand.get(GameTypes.ResourceType.TIMBER, 0)) == int(hb.get(GameTypes.ResourceType.TIMBER, 0)) - 2, "p38: 2 Timber paid")
+	_assert(int(hand.get(GameTypes.ResourceType.IRON, 0)) == int(hb.get(GameTypes.ResourceType.IRON, 0)) + 1, "p38: 1 Iron gained")
+
+	# (3) invalid selections keep the button hidden
+	await _p38_hand(ui, {GameTypes.ResourceType.TIMBER: 4})
+	await _p38_sides(ui, {GameTypes.ResourceType.TIMBER: 3}, {GameTypes.ResourceType.GRAIN: 1, GameTypes.ResourceType.IRON: 1})
+	_assert(not bool(ui._trade_ratio_btn.visible), "p38: 3 Timber (not a multiple of 2) hides the button")
+	await _p38_sides(ui, {GameTypes.ResourceType.TIMBER: 4}, {GameTypes.ResourceType.IRON: 1})
+	_assert(not bool(ui._trade_ratio_btn.visible), "p38: 4 Timber for 1 card (2 units) hides the button")
+	await _p38_sides(ui, {GameTypes.ResourceType.TIMBER: 4}, {GameTypes.ResourceType.TIMBER: 1, GameTypes.ResourceType.IRON: 1})
+	_assert(not bool(ui._trade_ratio_btn.visible), "p38: a resource on both sides hides the button")
+
+	# (4) plain bank without any port
+	st.vertex_building[v_timber] = GameTypes.BuildingType.NONE
+	_assert(st.get_trade_ratio(0, GameTypes.ResourceType.CLAY) == 4, "p38: with no port Clay is 4:1")
+	await _p38_hand(ui, {GameTypes.ResourceType.CLAY: 8})
+	await _p38_sides(ui, {GameTypes.ResourceType.CLAY: 8}, {GameTypes.ResourceType.GRAIN: 1, GameTypes.ResourceType.IRON: 1})
+	_assert(bool(ui._trade_ratio_btn.visible), "p38: 8 Clay for 2 cards shows the bank button")
+	_assert(str(ui._trade_ratio_btn.text) == "Bank 4:1", "p38: single 4:1 ratio keeps 'Bank 4:1'")
+	hb = st.players[0]["hand"].duplicate()
+	_ui_real_click(ui._trade_ratio_btn)
+	await _ui_settle(2)
+	hand = st.players[0]["hand"]
+	_assert(int(hand.get(GameTypes.ResourceType.CLAY, 0)) == int(hb.get(GameTypes.ResourceType.CLAY, 0)) - 8, "p38: 8 Clay paid to the bank")
+	_assert(int(hand.get(GameTypes.ResourceType.GRAIN, 0)) == int(hb.get(GameTypes.ResourceType.GRAIN, 0)) + 1 and int(hand.get(GameTypes.ResourceType.IRON, 0)) == int(hb.get(GameTypes.ResourceType.IRON, 0)) + 1, "p38: the bank paid both cards")
+
+	# (5) mixed ratios: 2 Timber (2:1) + 4 Clay (4:1) for 1 Grain + 1 Iron
+	st.vertex_building[v_timber] = GameTypes.BuildingType.SETTLEMENT
+	await _p38_hand(ui, {GameTypes.ResourceType.TIMBER: 2, GameTypes.ResourceType.CLAY: 4})
+	await _p38_sides(ui, {GameTypes.ResourceType.TIMBER: 2, GameTypes.ResourceType.CLAY: 4}, {GameTypes.ResourceType.GRAIN: 1, GameTypes.ResourceType.IRON: 1})
+	_assert(bool(ui._trade_ratio_btn.visible), "p38: mixed-ratio plan shows the button")
+	_assert(str(ui._trade_ratio_btn.text) == "Bank / Port", "p38: mixed ratios say 'Bank / Port' (got %s)" % str(ui._trade_ratio_btn.text))
+	plan = ui._bank_selection_check(st, 0)
+	swaps = plan.get("swaps", [])
+	_assert(swaps.size() == 2 and int(swaps[0]["give_res"]) == GameTypes.ResourceType.TIMBER and int(swaps[0]["get_res"]) == GameTypes.ResourceType.GRAIN and int(swaps[1]["give_res"]) == GameTypes.ResourceType.CLAY and int(swaps[1]["get_res"]) == GameTypes.ResourceType.IRON, "p38: mixed plan pairs give ids ascending with get ids ascending")
+	hb = st.players[0]["hand"].duplicate()
+	_ui_real_click(ui._trade_ratio_btn)
+	await _ui_settle(2)
+	hand = st.players[0]["hand"]
+	_assert(int(hand.get(GameTypes.ResourceType.TIMBER, 0)) == int(hb.get(GameTypes.ResourceType.TIMBER, 0)) - 2, "p38: the mixed trade paid 2 Timber")
+	_assert(int(hand.get(GameTypes.ResourceType.CLAY, 0)) == int(hb.get(GameTypes.ResourceType.CLAY, 0)) - 4, "p38: the mixed trade paid 4 Clay")
+	_assert(int(hand.get(GameTypes.ResourceType.GRAIN, 0)) == int(hb.get(GameTypes.ResourceType.GRAIN, 0)) + 1 and int(hand.get(GameTypes.ResourceType.IRON, 0)) == int(hb.get(GameTypes.ResourceType.IRON, 0)) + 1, "p38: the mixed trade delivered both cards")
+
+	# (6) the UI cannot select more than the hand holds: give counts clamp
+	await _p38_hand(ui, {GameTypes.ResourceType.TIMBER: 3})
+	await _p38_sides(ui, {}, {})
+	for i in range(5):
+		_ui_real_click(ui._res_card_refs[GameTypes.ResourceType.TIMBER])
+		await _ui_settle(1)
+	_assert(int(ui._trade_give_counts.get(GameTypes.ResourceType.TIMBER, 0)) == 3, "p38: give stops at the 3 Timber held")
+	await _p38_sides(ui, {GameTypes.ResourceType.TIMBER: 3}, {GameTypes.ResourceType.GRAIN: 1, GameTypes.ResourceType.IRON: 1})
+	_assert(not bool(ui._trade_ratio_btn.visible), "p38: the impossible 3-for-2 selection stays hidden")
+	_pass_section("144. Bank/Port Trade Plan Test (mixed get side, mixed ratios, wording, clamped selection, real clicks)")
