@@ -920,6 +920,21 @@ func _render_static_water(ci: CanvasItem) -> void:
 		var wave_col := Color(Palette.SEA_DEEP, 0.45) if i % 2 == 0 else Color(Palette.SEA_FOAM, 0.60)
 		ci.draw_arc(board_center, hex_radius * radius_mult, ang, ang + span, 12, wave_col, 2.0, true)
 
+# p40: the header band paints nothing, and the UI asks the board to continue
+# its painted sea on another canvas (_sea_band, drawn behind the whole UI).
+# Translating by the board's global position puts the canvas in the board's
+# own coordinate space, so the same circles and arcs are geometric
+# continuations of the baked water: no seam at the board's top edge and no
+# colour step at the old board/sidebar x edge inside the band. Only the base
+# water is drawn - no land, clouds or fit changes; the board's layout rect,
+# camera and picking are untouched.
+func paint_sea_band(ci: CanvasItem) -> void:
+	if _no_render or state == null or size.x <= 0.0 or size.y <= 0.0:
+		return
+	ci.draw_set_transform(global_position - ci.global_position, 0.0, Vector2.ONE)
+	_render_static_water(ci)
+	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
 func _render_static_land(ci: CanvasItem) -> void:
 	if state == null:
 		return
