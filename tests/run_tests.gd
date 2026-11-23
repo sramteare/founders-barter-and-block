@@ -1471,6 +1471,16 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
 		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
 	], _test_bank_trade_plan_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_raised_card_shape_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_sea_behind_top_bar_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -9648,8 +9658,8 @@ func _test_ui_style_setting_body(ui: Node) -> void:
 	var state_before: GameState = ui.session.state
 	var turn_before := int(state_before.turn_number)
 	var hand_before: Dictionary = (state_before.players[0].get("hand", {}) as Dictionary).duplicate(true)
-	var header_box := ui._header_panel.get_theme_stylebox("panel") as StyleBoxFlat
-	_assert(header_box != null and header_box.bg_color == paper["PANEL_BG"], "the header panel is built in the paper panel colour")
+	var header_band: Variant = ui._header_panel.get_theme_stylebox("panel")
+	_assert(header_band is StyleBoxEmpty and (header_band as StyleBoxFlat) == null, "the header band paints nothing (p40: the sea shows behind it)")
 	var title_label: Label = null
 	for head_label in ui._header_panel.find_children("*", "Label", true, false):
 		if (head_label as Label).text == "Founders: Barter & Block":
@@ -9668,7 +9678,7 @@ func _test_ui_style_setting_body(ui: Node) -> void:
 	ui.set_ui_style("dark")
 	_assert(Palette.current_style == "dark", "set_ui_style switches the live palette")
 	_assert(String(ui._ui_style) == "dark", "the UI records the chosen style id")
-	_assert(header_box.bg_color == dark["PANEL_BG"], "the open header panel goes dark")
+	_assert(ui._header_panel.get_theme_stylebox("panel") is StyleBoxEmpty, "the open header band still paints nothing when the style goes dark")
 	_assert(title_label.get_theme_color("font_color") == dark["HEADING"], "the title label goes dark")
 	_assert(normal_box.bg_color == dark["BUTTON_BG"], "the button normal stylebox goes dark")
 	var cfg := ConfigFile.new()
@@ -9684,12 +9694,11 @@ func _test_ui_style_setting_body(ui: Node) -> void:
 	root.add_child(second)
 	await _ui_settle(3)
 	_assert(String(second._ui_style) == "dark", "a fresh UI reads the dark style from the settings file")
-	var second_header := second._header_panel.get_theme_stylebox("panel") as StyleBoxFlat
-	_assert(second_header != null and second_header.bg_color == dark["PANEL_BG"], "a fresh UI is built in the saved dark style")
+	_assert(second._header_panel.get_theme_stylebox("panel") is StyleBoxEmpty, "a fresh UI also paints nothing behind the top bar")
 	second.free()
 	ui.set_ui_style("paper")
 	_assert(Palette.current_style == "paper", "the style switches back to paper")
-	_assert(header_box.bg_color == paper["PANEL_BG"], "the header panel is paper again")
+	_assert(ui._header_panel.get_theme_stylebox("panel") is StyleBoxEmpty, "the header band still paints nothing after switching back to paper")
 	_assert(title_label.get_theme_color("font_color") == paper["HEADING"], "the title label is paper again")
 	_assert(normal_box.bg_color == paper["BUTTON_BG"], "the button stylebox is paper again")
 	var cfg2 := ConfigFile.new()
@@ -10760,8 +10769,8 @@ func _p34_chrome_checks(ui: Node, tag: String) -> void:
 	_assert(trade.border_width_left == 1 and trade.border_color == Palette.PANEL_LINE, "%s: the trade panel has one 1 px frame" % tag)
 	_assert(tray.border_width_left == 0 and tray.border_width_right == 0 and tray.border_width_top == 0 and tray.border_width_bottom == 0, "%s: the tray draws no second frame" % tag)
 	_assert(log.border_width_left == 1 and log.border_color == Palette.PANEL_LINE, "%s: the event log box has a 1 px frame" % tag)
-	var header := _p34_box(ui._header_panel)
-	_assert(header != null and header.border_width_bottom == 0 and header.border_width_top == 0, "%s: the title band is a plain background with no line" % tag)
+	var band_box: Variant = ui._header_panel.get_theme_stylebox("panel")
+	_assert(band_box is StyleBoxEmpty, "%s: the title band paints nothing (sea behind it, p40)" % tag)
 	var pill := _p34_box(ui._header_pill)
 	_assert(pill != null and _p34_border_all(pill) and pill.border_color == Palette.PANEL_LINE, "%s: the title pill is a fine line" % tag)
 	var hand := _p34_box(ui._hand_bar_panel)
@@ -10781,8 +10790,8 @@ func _p34_chrome_checks(ui: Node, tag: String) -> void:
 	_assert(trade.shadow_color == log.shadow_color and trade.shadow_offset == log.shadow_offset, "%s: the two shadows are identical" % tag)
 	_assert(trade.bg_color == log.bg_color, "%s: trade and log share the raised fill" % tag)
 	_assert(tray.bg_color == log.bg_color, "%s: the tray fill matches the raised fill" % tag)
-	# B1 (p34r): the frame is a closed card — 1 px line and radius 8 on all four
-	# sides — and it is inset inside the clipping slot so its whole bottom
+	# B1 (p34r, p39): the frame is a closed card — 1 px line and radius 8 on
+	# all four sides — and it is inset inside the slot so its whole bottom
 	# shadow draws instead of being cut off at the slot's lower edge.
 	_assert(_p34_border_all(trade), "%s: the trade frame is a 1 px line on all four sides" % tag)
 	_assert(
@@ -10793,14 +10802,15 @@ func _p34_chrome_checks(ui: Node, tag: String) -> void:
 	var frame_r: Rect2 = ui._trade_frame.get_global_rect()
 	_assert(
 		frame_r.position.x >= slot_r.position.x - 0.01 and frame_r.position.y >= slot_r.position.y - 0.01 and frame_r.end.x <= slot_r.end.x + 0.01 and frame_r.end.y <= slot_r.end.y + 0.01,
-		"%s: the drawn trade frame lies inside the slot's clip rect (%s in %s)" % [tag, str(frame_r), str(slot_r)]
+		"%s: the drawn trade frame lies inside the slot's rect (%s in %s)" % [tag, str(frame_r), str(slot_r)]
 	)
 	_assert(
 		frame_r.end.y + trade.shadow_offset.y + trade.shadow_size <= slot_r.end.y + 0.01,
-		"%s: the trade frame leaves the full shadow reach below it inside the clip rect" % tag
+		"%s: the trade frame leaves the full shadow reach below it inside the slot" % tag
 	)
 	_assert(frame_r.position.x == slot_r.position.x and frame_r.end.x == slot_r.end.x, "%s: the trade frame keeps the slot's side lines" % tag)
 	_assert(frame_r.position.y == slot_r.position.y, "%s: the trade frame keeps the slot's top line" % tag)
+	_assert(not bool(ui._trade_slot.clip_contents), "%s: the trade slot does not clip the card's shadow" % tag)
 	# B2 (p34r): nothing painted over either raised panel's fill with its own colour.
 	_p34r_overlay_check(ui._log_panel, tag, "event log box")
 	_p34r_overlay_check(ui._trade_frame, tag, "trade frame")
@@ -11585,3 +11595,248 @@ func _test_bank_trade_plan_body(ui: Node) -> void:
 	await _p38_sides(ui, {GameTypes.ResourceType.TIMBER: 3}, {GameTypes.ResourceType.GRAIN: 1, GameTypes.ResourceType.IRON: 1})
 	_assert(not bool(ui._trade_ratio_btn.visible), "p38: the impossible 3-for-2 selection stays hidden")
 	_pass_section("144. Bank/Port Trade Plan Test (mixed get side, mixed ratios, wording, clamped selection, real clicks)")
+
+# --- 145: the trade box and the event log are the same raised card (p39) -------
+func _p39_card_style_check(ui: Node, tag: String) -> void:
+	var tab: Dictionary = Palette.STYLES[Palette.current_style]
+	var boxes: Array = []
+	for pair in [["trade frame", ui._trade_frame], ["event log box", ui._log_panel]]:
+		var st := _p34_box(pair[1] as Control)
+		_assert(st != null, "%s: %s carries its card stylebox" % [tag, str(pair[0])])
+		if st == null:
+			return
+		boxes.append(st)
+		_assert(st.bg_color == tab["SURFACE_RAISED"], "%s: %s fill is SURFACE_RAISED" % [tag, str(pair[0])])
+		_assert(_p34_border_all(st) and st.border_color == tab["PANEL_LINE"], "%s: %s is a 1 px PANEL_LINE line" % [tag, str(pair[0])])
+		_assert(st.corner_radius_top_left == 8 and st.corner_radius_top_right == 8 and st.corner_radius_bottom_left == 8 and st.corner_radius_bottom_right == 8, "%s: %s is a true radius-8 quarter circle" % [tag, str(pair[0])])
+		_assert(st.corner_detail == 16 and is_equal_approx(st.anti_aliasing_size, 0.5), "%s: %s rasterises its corners with the p39r smoothest setting (detail 16, aa size 0.5)" % [tag, str(pair[0])])
+		_assert(st.shadow_color == tab["SHADOW_RAISED"] and st.shadow_size == 7 and st.shadow_offset == Vector2(0, 2), "%s: %s carries the shared raised shadow" % [tag, str(pair[0])])
+		_assert(st.content_margin_left == 10.0 and st.content_margin_right == 10.0 and st.content_margin_top == 10.0 and st.content_margin_bottom == 10.0, "%s: %s keeps its 10 px content margins" % [tag, str(pair[0])])
+	if boxes.size() == 2:
+		var a := boxes[0] as StyleBoxFlat
+		var b := boxes[1] as StyleBoxFlat
+		var same: bool = a.bg_color == b.bg_color and a.border_color == b.border_color and _p34_border_all(a) and _p34_border_all(b) and a.corner_radius_top_left == b.corner_radius_top_left and a.corner_detail == b.corner_detail and is_equal_approx(a.anti_aliasing_size, b.anti_aliasing_size) and a.shadow_color == b.shadow_color and a.shadow_size == b.shadow_size and a.shadow_offset == b.shadow_offset and a.content_margin_left == b.content_margin_left
+		_assert(same, "%s: both boxes are built by the same raised-card construction" % tag)
+	_assert(not bool(ui._trade_slot.clip_contents), "%s: the trade slot must not clip the card shadow" % tag)
+
+func _test_raised_card_shape_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	ui.auto_ai = false
+	if ui._splash_overlay != null:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	await _ui_settle(4)
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(4811, seats, true, 0)
+	var ok := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return st.turn_number >= 2 and st.phase == GameTypes.TurnPhase.TURN_MAIN and st.current_player == 0 and not ui.session.is_ai_to_act() and st.open_trade.is_empty()
+	)
+	_assert(ok, "p39: reached the human's main phase")
+	if not ok:
+		return
+	await _ui_settle(3)
+	for r in GameTypes.ALL_RESOURCES:
+		ui.session.state.players[0]["hand"][r] = 4
+	ui._refresh_ui()
+	if not bool(ui._trade_tray.visible):
+		ui._toggle_trade_tray()
+	await _ui_settle(2)
+	_assert(bool(ui._trade_tray.visible), "p39: the trade editor is open")
+	# rects locked at 1280x800, measured before the p39 change (before/after identical)
+	var want: Dictionary = {
+		"_trade_frame": Rect2(772, 346, 496, 183),
+		"_trade_tray": Rect2(788, 349, 478, 177),
+		"_log_panel": Rect2(772, 568, 496, 94),
+		"_event_log": Rect2(782, 578, 476, 74),
+	}
+	for style in ["paper", "dark", "paper"]:
+		ui.set_ui_style(style)
+		await _ui_settle(4)
+		_p39_card_style_check(ui, style)
+		for key in want.keys():
+			var got: Rect2 = (ui.get(key) as Control).get_global_rect()
+			var w: Rect2 = want[key]
+			_assert(got.position.distance_to(w.position) < 0.01 and got.size.distance_to(w.size) < 0.01, "%s: %s keeps its rect, got %s want %s" % [style, key, str(got), str(w)])
+	_pass_section("145. Raised Card Shape Test (trade box and event log share one construction: 1 px PANEL_LINE radius 8, shared shadow, no slot clip, rects locked in both styles)")
+
+func _p40_find_heading(ui: Node) -> Label:
+	for h in ui._sidebar_box.find_children("*", "Label", true, false):
+		if (h as Label).text == "PLAYER SCOREBOARD":
+			return h as Label
+	return null
+
+func _p40_tile_centers(ui: Node) -> Dictionary:
+	var out := {}
+	var topo := HexMath.get_topology()
+	for i in range(6):
+		var p: Vector2 = ui._board_view._unit_to_screen(topo.tile_centers[i], ui._board_view._get_hex_radius())
+		out[i] = p + ui._board_view.global_position
+	return out
+
+func _p40_sea_checks(ui: Node, tag: String) -> void:
+	var band_box: Variant = ui._header_panel.get_theme_stylebox("panel")
+	_assert(band_box is StyleBoxEmpty, "%s: the header band paints nothing (no fill, no line, no shadow)" % tag)
+	_assert(ui._sea_band != null and is_instance_valid(ui._sea_band), "%s: the sea band node exists" % tag)
+	if ui._sea_band == null:
+		return
+	var sea_r: Rect2 = (ui._sea_band as Control).get_global_rect()
+	_assert(
+		sea_r.has_point(Vector2(2.0, 2.0)) and sea_r.has_point(Vector2(1277.0, 51.0)),
+		"%s: the sea layer covers the band from y = 0 across the full width (%s)" % [tag, str(sea_r)]
+	)
+	_assert((ui._sea_band as Control).mouse_filter == Control.MOUSE_FILTER_IGNORE, "%s: the sea band passes clicks through" % tag)
+	_assert(ui._sea_band.is_connected("draw", ui._on_sea_band_draw), "%s: the sea band paints the board's water continuation" % tag)
+	var first: ColorRect = null
+	for c in ui.get_children():
+		if c is ColorRect:
+			first = c as ColorRect
+			break
+	_assert(first != null and first.get_global_rect() == sea_r, "%s: the flat sea base and the sea band span the same full rect" % tag)
+	var board_r: Rect2 = ui._board_view.get_global_rect()
+	_assert(absf(board_r.position.y - 52.0) < 0.01, "%s: the board layout rect still starts at y = 52 (%s)" % [tag, str(board_r)])
+	var side := _p34_box(ui._right_panel)
+	_assert(side != null, "%s: the sidebar carries its stylebox" % tag)
+	if side == null:
+		return
+	var side_r: Rect2 = ui._right_panel.get_global_rect()
+	_assert(absf(side_r.position.y - 52.0) < 0.01, "%s: the sidebar still starts below the band at y = 52" % tag)
+	_assert(
+		side.corner_radius_top_left == 12 and side.corner_radius_top_right == 12 and side.corner_radius_bottom_left == 0 and side.corner_radius_bottom_right == 0,
+		"%s: the sidebar's top corners are rounded 12, bottom square" % tag
+	)
+	_assert(side.border_width_left == 1 and side.border_color == Palette.PANEL_LINE, "%s: the sidebar keeps its 1 px left line" % tag)
+	var heading := _p40_find_heading(ui)
+	_assert(heading != null and bool(heading.visible), "%s: the scoreboard heading is visible" % tag)
+	if heading != null:
+		var hr: Rect2 = heading.get_global_rect()
+		var dist := (hr.position - Vector2(side_r.position.x + 12.0, side_r.position.y + 12.0)).length()
+		_assert(
+			dist < 12.0,
+			"%s: the heading top-left stays inside the rounded corner's filled area (%s, dist %.2f)" % [tag, str(hr), dist]
+		)
+
+func _p40_lock(rects: Dictionary, ui: Node, tag: String) -> void:
+	for key in rects.keys():
+		var got: Rect2 = (ui.get(key) as Control).get_global_rect()
+		var w: Rect2 = rects[key]
+		_assert(
+			got.position.distance_to(w.position) < 0.01 and got.size.distance_to(w.size) < 0.01,
+			"%s: %s keeps its BEFORE rect, got %s want %s" % [tag, String(key), str(got), str(w)]
+		)
+
+func _p40_lock_tiles(expected: Dictionary, ui: Node, tag: String) -> void:
+	var got := _p40_tile_centers(ui)
+	for key in expected.keys():
+		var w: Vector2 = expected[key]
+		_assert(
+			got[key].distance_to(w) < 0.05,
+			"%s: tile %d hex centre unchanged, got %s want %s" % [tag, int(key), str(got[key]), str(w)]
+		)
+
+func _test_sea_behind_top_bar_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	ui.auto_ai = false
+	if ui._splash_overlay != null and ui._splash_overlay.visible:
+		ui._splash_overlay.visible = false
+	await _ui_settle(4)
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui.session.start_match(4811, seats, true, 0)
+	var ok := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return st.turn_number >= 2 and st.phase == GameTypes.TurnPhase.TURN_MAIN and st.current_player == 0 and not ui.session.is_ai_to_act() and st.open_trade.is_empty()
+	)
+	_assert(ok, "p40: reached the human's main phase")
+	if not ok:
+		return
+	# Driven turns leave resource-flight cards and toasts mid-tween; they live in
+	# full-window layers and can cover the pill for a few seconds. Retire them
+	# before the input checks (bounded loop, worst case ~20 s of frames).
+	var guard := 0
+	while guard < 1200 and (ui._flight_layer.get_child_count() > 0 or not ui._toast_labels.is_empty()):
+		await process_frame
+		guard += 1
+	_assert(guard < 1200, "p40: the flight and toast animations retired (guard %d, flights %d, toasts %d)" % [guard, ui._flight_layer.get_child_count(), ui._toast_labels.size()])
+	var want800 := {
+		"_header_panel": Rect2(0, 0, 1280, 52),
+		"_header_pill": Rect2(48, 6, 1184, 40),
+		"_menu_btn": Rect2(62, 9, 44, 34),
+		"_board_view": Rect2(0, 52, 760, 620),
+		"_right_panel": Rect2(760, 52, 520, 620),
+		"_offer_strip": Rect2(0, 672, 1280, 30),
+		"_hand_bar_panel": Rect2(0, 702, 1280, 98),
+	}
+	var tiles800 := {
+		0: Vector2(289.93335, 202.36), 1: Vector2(380.0, 202.36), 2: Vector2(470.06665, 202.36),
+		3: Vector2(244.90004, 280.36), 4: Vector2(334.96667, 280.36), 5: Vector2(425.03333, 280.36),
+	}
+	var want875 := {
+		"_header_panel": Rect2(0, 0, 1280, 52),
+		"_header_pill": Rect2(48, 6, 1184, 40),
+		"_menu_btn": Rect2(62, 9, 44, 34),
+		"_board_view": Rect2(0, 52, 760, 695),
+		"_right_panel": Rect2(760, 52, 520, 695),
+		"_offer_strip": Rect2(0, 747, 1280, 30),
+		"_hand_bar_panel": Rect2(0, 777, 1280, 98),
+	}
+	var tiles875 := {
+		0: Vector2(277.80902, 218.37), 1: Vector2(380.0, 218.37), 2: Vector2(482.19098, 218.37),
+		3: Vector2(226.71352, 306.87), 4: Vector2(328.90451, 306.87), 5: Vector2(431.09549, 306.87),
+	}
+	for style in ["paper", "dark", "paper"]:
+		ui.set_ui_style(style)
+		await _ui_settle(4)
+		_p40_sea_checks(ui, "1280x800 " + style)
+		_p40_lock(want800, ui, "1280x800 " + style)
+		_p40_lock_tiles(tiles800, ui, "1280x800 " + style)
+		var hr: Rect2 = _p40_find_heading(ui).get_global_rect()
+		_assert(hr.position.distance_to(Vector2(772, 62)) < 0.01 and absf(hr.size.x - 496.0) < 0.01, "1280x800 %s: the heading keeps its rect (%s)" % [style, str(hr)])
+	root.size = Vector2i(1024, 700)
+	await _ui_settle(6)
+	for style in ["paper", "dark", "paper"]:
+		ui.set_ui_style(style)
+		await _ui_settle(4)
+		_p40_sea_checks(ui, "1024x700 " + style)
+		_p40_lock(want875, ui, "1024x700 " + style)
+		_p40_lock_tiles(tiles875, ui, "1024x700 " + style)
+		var hr2: Rect2 = _p40_find_heading(ui).get_global_rect()
+		_assert(hr2.position.distance_to(Vector2(772, 62)) < 0.01 and absf(hr2.size.x - 496.0) < 0.01, "1024x700 %s: the heading keeps its rect (%s)" % [style, str(hr2)])
+	root.size = Vector2i(1280, 800)
+	await _ui_settle(6)
+	# A real click in the top band over the board (left of the pill) must not
+	# touch the game: no state change, no hover, no selection, no popup.
+	var state_before: GameState = ui.session.state
+	var turn_before := int(ui.session.state.turn_number)
+	var at := root.get_screen_transform() * Vector2(20.0, 26.0)
+	var mv := InputEventMouseMotion.new()
+	mv.position = at
+	mv.global_position = at
+	root.push_input(mv)
+	var pe := InputEventMouseButton.new()
+	pe.button_index = MOUSE_BUTTON_LEFT
+	pe.pressed = true
+	pe.position = at
+	pe.global_position = at
+	root.push_input(pe)
+	var re := InputEventMouseButton.new()
+	re.button_index = MOUSE_BUTTON_LEFT
+	re.pressed = false
+	re.position = at
+	re.global_position = at
+	root.push_input(re)
+	await _ui_settle(3)
+	_assert(ui.session.state == state_before and int(ui.session.state.turn_number) == turn_before, "the band click changed no game state")
+	_assert(int(ui._board_view._hovered_tile) == -1, "the band click hovers no hex")
+	_assert(not bool(ui._menu_popup.visible), "the band click opens no menu")
+	_assert(not bool(ui._build_bubble.visible), "the band click opens no build bubble")
+	# And the pill's menu button still works through the sea-filled band.
+	_ui_real_click(ui._menu_btn)
+	await _ui_settle(3)
+	_assert(bool(ui._menu_popup.visible), "the real click still opens the menu popup")
+	ui._menu_popup.hide()
+	await _ui_settle(2)
+	_pass_section("146. Sea Behind Top Bar Test (band paints nothing, sea continues to y = 0 full width behind the pill and the rounded sidebar corners, rects and hex centres locked in both styles and both sizes, band click inert, menu still works)")

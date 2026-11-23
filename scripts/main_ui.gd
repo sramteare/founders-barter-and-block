@@ -146,6 +146,7 @@ var _res_card_refs: Dictionary = {}
 var _action_chips: Dictionary = {}
 var _sidebar_box: VBoxContainer = null
 var _header_panel: Control = null
+var _sea_band: Control = null
 var _header_pill: PanelContainer = null
 var _toast_host: Control = null
 var _prev_dash_hand: Dictionary = {}
@@ -451,23 +452,31 @@ func _build_ui() -> void:
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
 
+	# p40: the header band paints nothing, so this layer — drawn below
+	# root_vbox but above the flat SEA background — continues the board's
+	# painted sea (same foam rings and wave arcs, same geometry) up to y = 0
+	# across the full window width and behind the sidebar's rounded top
+	# corners. The opaque board/sidebar/hand cover it everywhere else, so the
+	# only visible parts are the band and the two corner cut-outs, and the
+	# rings cross y = 52 without a seam. Clicks pass through to the band as
+	# before.
+	_sea_band = Control.new()
+	_sea_band.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_sea_band.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_sea_band.draw.connect(_on_sea_band_draw)
+	add_child(_sea_band)
+
 	var root_vbox := VBoxContainer.new()
 	root_vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root_vbox.add_theme_constant_override("separation", 0)
 	add_child(root_vbox)
 
-	# 1. Top Bar: p36 keeps the 52 px band as plain app background (no line) and
-	# floats one rounded pill inside it, island-style, with large side margins.
+	# 1. Top Bar: p40 removes the 52 px band's paint entirely (nothing is drawn
+	# by the band itself; the sea behind it continues to y = 0, see _sea_band)
+	# and floats one rounded pill inside it, island-style, with large side
+	# margins.
 	var top_panel := PanelContainer.new()
-	var top_style := _paper_panel_style()
-	top_style.set_corner_radius_all(0)
-	top_style.shadow_size = 0
-	top_style.set_border_width_all(0)
-	top_style.content_margin_left = 0
-	top_style.content_margin_right = 0
-	top_style.content_margin_top = 0
-	top_style.content_margin_bottom = 0
-	top_panel.add_theme_stylebox_override("panel", top_style)
+	top_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	top_panel.custom_minimum_size = Vector2(0, 52)
 	_header_panel = top_panel
 	_header_panel.resized.connect(_apply_window_layout)
@@ -624,6 +633,7 @@ func _build_ui() -> void:
 	_board_view.steal_target_clicked.connect(_on_steal_target_clicked)
 	_board_view.build_spot_clicked.connect(_on_build_spot_clicked)
 	_board_view.background_clicked.connect(_on_board_background_clicked)
+	_board_view.resized.connect(_refresh_sea_band)
 	left_column.add_child(_board_view)
 
 	_turn_banner = Control.new()
@@ -661,6 +671,11 @@ func _build_ui() -> void:
 	right_panel.custom_minimum_size = Vector2(520, 0)
 	var right_style := _paper_panel_style(true)
 	right_style.set_corner_radius_all(0)
+	# p40: the sidebar begins below the sea-filled header band, so its two top
+	# corners are rounded (bottom stays square) and the sea shows through the
+	# cut-off corner pixels.
+	right_style.corner_radius_top_left = 12
+	right_style.corner_radius_top_right = 12
 	right_style.shadow_size = 0
 	right_style.border_width_top = 0
 	right_style.border_width_right = 0
@@ -832,14 +847,6 @@ func _build_ui() -> void:
 	log_header.add_child(_log_toggle_btn)
 
 	_log_panel = _make_card_panel(Palette.SURFACE_RAISED)
-	var log_st := (_log_panel.get_theme_stylebox("panel") as StyleBoxFlat).duplicate() as StyleBoxFlat
-	log_st.border_color = Palette.PANEL_LINE
-	log_st.set_border_width_all(1)
-	log_st.set_corner_radius_all(8)
-	log_st.shadow_color = Palette.SHADOW_RAISED
-	log_st.shadow_size = 7
-	log_st.shadow_offset = Vector2(0, 2)
-	_log_panel.add_theme_stylebox_override("panel", log_st)
 	_log_panel.custom_minimum_size = Vector2(0, 64)
 	right_vbox.add_child(_log_panel)
 
@@ -851,6 +858,7 @@ func _build_ui() -> void:
 	_event_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_style_rich_label(_event_log)
 	_log_panel.add_child(_event_log)
+	_apply_raised_card(_log_panel)
 
 	# 3. Bottom Visual Card Hand Bar (always visible), with the open-offer strip above it
 	_build_offer_strip(root_vbox)
@@ -2256,6 +2264,7 @@ func set_ui_style(id: String) -> void:
 		_style_button(_style_btn, "ghost")
 	if _review_slider_ticks != null and is_instance_valid(_review_slider_ticks):
 		_review_slider_ticks.queue_redraw()
+	_refresh_sea_band()
 	for toast_label in _toast_labels:
 		if is_instance_valid(toast_label) and toast_label.has_meta("toast_tint"):
 			var tint := Palette.remap(toast_label.get_meta("toast_tint") as Color, table)
@@ -4875,17 +4884,15 @@ func _on_subpanel_scrim_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------------
 func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_slot = PanelContainer.new()
-	# p34r: the slot clips (its min-size keeps the EVENT LOG below from moving),
-	# so the card itself is drawn by a child Panel inset from the slot's bottom
-	# by the raised shadow's reach (7 px size + 2 px offset). That keeps the
-	# shadow inside the clip rect instead of cutting it off square.
+	# p39: the slot no longer clips. Its square clip rect cut the frame's soft
+	# shadow at the top-left corner into a hard wedge; the frame's shadow is
+	# small (7 px, offset 2) and the neighbours only receive soft shading.
 	var sst := StyleBoxEmpty.new()
 	sst.content_margin_left = 8
 	sst.content_margin_right = 8
 	sst.content_margin_top = 5
 	sst.content_margin_bottom = 5
 	_trade_slot.add_theme_stylebox_override("panel", sst)
-	_trade_slot.clip_contents = true
 	_trade_slot.custom_minimum_size = Vector2(0, 214)
 	parent_column.add_child(_trade_slot)
 	_trade_host = Control.new()
@@ -4893,15 +4900,7 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_slot.add_child(_trade_host)
 	_trade_frame = Panel.new()
 	_trade_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var sst2 := _paper_panel_style(true)
-	sst2.bg_color = Palette.SURFACE_RAISED
-	sst2.set_corner_radius_all(8)
-	sst2.set_border_width_all(1)
-	sst2.border_color = Palette.PANEL_LINE
-	sst2.shadow_color = Palette.SHADOW_RAISED
-	sst2.shadow_size = 7
-	sst2.shadow_offset = Vector2(0, 2)
-	_trade_frame.add_theme_stylebox_override("panel", sst2)
+	_apply_raised_card(_trade_frame)
 	_trade_host.add_child(_trade_frame)
 	_trade_slot.resized.connect(_layout_trade_slot)
 	_trade_idle_lbl = Label.new()
@@ -5766,6 +5765,15 @@ func _on_window_resized() -> void:
 func _top_bar_margin(width: float) -> float:
 	return clampf(width * 0.0375, 24.0, 96.0)
 
+func _on_sea_band_draw() -> void:
+	if _board_view == null or not is_instance_valid(_board_view) or _sea_band == null:
+		return
+	_board_view.paint_sea_band(_sea_band)
+
+func _refresh_sea_band() -> void:
+	if _sea_band != null and is_instance_valid(_sea_band):
+		_sea_band.queue_redraw()
+
 func _layout_top_bar() -> void:
 	if _header_panel == null or _header_pill == null:
 		return
@@ -5784,6 +5792,7 @@ func _apply_window_layout() -> void:
 		return
 	var sidebar_w: float = clampf(base.x * 0.35, 520.0, 680.0)
 	_right_panel.custom_minimum_size = Vector2(sidebar_w, 0)
+	_refresh_sea_band()
 	var content_h: float = _right_panel.size.y - 20.0
 	if content_h < 320.0:
 		return
@@ -5838,12 +5847,13 @@ func _apply_window_layout() -> void:
 func _layout_trade_slot() -> void:
 	if _trade_slot == null or _trade_tray == null or _trade_frame == null:
 		return
-	# p34r: the frame paints the card (fill, 1 px line, radius 8, drop shadow)
-	# inset 9 px (= shadow size 7 + offset 2) from the slot's bottom so its
-	# shadow stays inside the slot's clip rect. Top/left/right keep the p34
-	# pixel positions. The tray keeps its 478 px width and moves 3 px up; at
-	# slot_height-15 it still clears the 176 px worst-case (5+5) editor and
-	# ends 2 px above the frame's bottom line.
+	# p34r/p39: the frame paints the card (fill, 1 px line, radius 8, drop
+	# shadow) inset 9 px (= shadow size 7 + offset 2) from the slot's bottom.
+	# The slot no longer clips (p39), so the top/left shadow fades softly
+	# instead of being cut into a wedge; the positions keep the p34 pixels.
+	# The tray keeps its 478 px width and moves 3 px up; at slot_height-15 it
+	# still clears the 176 px worst-case (5+5) editor and ends 2 px above the
+	# frame's bottom line.
 	_trade_frame.position = Vector2(-8.0, -5.0)
 	_trade_frame.size = _trade_slot.size - Vector2(0.0, 9.0)
 	_trade_tray.position = Vector2(8.0, -2.0)
@@ -7374,6 +7384,37 @@ func _pulse_card(node: Control) -> void:
 # ---------------------------------------------------------------------
 # Paper / watercolour styling helpers
 # ---------------------------------------------------------------------
+# p39: ONE construction for the two raised cards (trade box, event log), so
+# they cannot drift apart: fill SURFACE_RAISED, one 1 px PANEL_LINE line,
+# radius 8, shared drop shadow. Measured with /tmp/opencode/p39/probe2.gd:
+# the 4.3 raster border follows the quarter circle at the same visual weight
+# as the straight edges (arc min 2.48 vs straight 2.54 paper; 1.13 vs 1.14
+# dark); the two stacked fill variants dilute the semi-transparent line
+# (1.79/1.11) and measure worse, so the single StyleBoxFlat stays. The
+# reported "square corner + wedge" was the trade slot's clip cutting the
+# shadow at its square corner - the slot does not clip anymore.
+# p39r: corner_detail 16 + anti_aliasing_size 0.5 measured (probe 40x40
+# corner crops vs a 16x LANCZOS ideal, /tmp/opencode/p39r) as the closest
+# 1 px line to the ideal: RMS -19..-22 % paper, -10..-13 % dark, max pixel
+# error -35 % paper, straight edges byte-identical; corner_detail alone and
+# the _draw arc variants were worse (paper +71 % / faint broken line).
+func _apply_raised_card(panel: Control) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Palette.SURFACE_RAISED
+	sb.set_border_width_all(1)
+	sb.border_color = Palette.PANEL_LINE
+	sb.set_corner_radius_all(8)
+	sb.corner_detail = 16
+	sb.anti_aliasing_size = 0.5
+	sb.shadow_color = Palette.SHADOW_RAISED
+	sb.shadow_size = 7
+	sb.shadow_offset = Vector2(0, 2)
+	sb.content_margin_left = 10.0
+	sb.content_margin_right = 10.0
+	sb.content_margin_top = 10.0
+	sb.content_margin_bottom = 10.0
+	panel.add_theme_stylebox_override("panel", sb)
+
 func _paper_panel_style(alt: bool = false) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	if alt:
