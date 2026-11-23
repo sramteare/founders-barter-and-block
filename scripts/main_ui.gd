@@ -32,8 +32,6 @@ var _strip_rebuild_key := ""
 var _chip_hover_texts: Dictionary = {}
 var _banner_hover_active := false
 var _trade_scroll: ScrollContainer = null
-var _side_trade_budget := 192.0
-var _slot_sync_stable := 0
 var _trade_last_ot_from: int = -1
 var _last_steal_serial: int = 0
 var _hand_count_hold: Dictionary = {}
@@ -148,6 +146,7 @@ var _res_card_refs: Dictionary = {}
 var _action_chips: Dictionary = {}
 var _sidebar_box: VBoxContainer = null
 var _header_panel: Control = null
+var _header_pill: PanelContainer = null
 var _toast_host: Control = null
 var _prev_dash_hand: Dictionary = {}
 var _prev_dash_pid: int = -1
@@ -336,6 +335,7 @@ var _log_panel: PanelContainer = null
 var _log_toggle_btn: Button = null
 var _right_panel: PanelContainer = null
 var _trade_slot: PanelContainer = null
+var _trade_frame: Panel = null
 var _trade_idle_lbl: Label = null
 var _trade_host: Control = null
 var _trade_chip_size_dirty := false
@@ -398,6 +398,7 @@ func _ready() -> void:
 	randomize()
 	_load_settings()
 	Palette.apply_style(_ui_style)
+	_build_ui_theme()
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	session = LocalSession.new()
 	session.state_updated.connect(_on_state_updated)
@@ -455,32 +456,55 @@ func _build_ui() -> void:
 	root_vbox.add_theme_constant_override("separation", 0)
 	add_child(root_vbox)
 
-	# 1. Top Bar: title + one-line instruction banner + muted turn counter
+	# 1. Top Bar: p36 keeps the 52 px band as plain app background (no line) and
+	# floats one rounded pill inside it, island-style, with large side margins.
 	var top_panel := PanelContainer.new()
 	var top_style := _paper_panel_style()
 	top_style.set_corner_radius_all(0)
 	top_style.shadow_size = 0
-	top_style.border_width_top = 0
-	top_style.border_width_left = 0
-	top_style.border_width_right = 0
-	top_style.border_width_bottom = 3
-	top_style.content_margin_left = 14
-	top_style.content_margin_right = 14
-	top_style.content_margin_top = 6
-	top_style.content_margin_bottom = 6
+	top_style.set_border_width_all(0)
+	top_style.content_margin_left = 0
+	top_style.content_margin_right = 0
+	top_style.content_margin_top = 0
+	top_style.content_margin_bottom = 0
 	top_panel.add_theme_stylebox_override("panel", top_style)
+	top_panel.custom_minimum_size = Vector2(0, 52)
 	_header_panel = top_panel
 	_header_panel.resized.connect(_apply_window_layout)
+	_header_panel.resized.connect(_layout_top_bar)
 	root_vbox.add_child(top_panel)
+	var top_host := Control.new()
+	top_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top_panel.add_child(top_host)
+	_header_pill = PanelContainer.new()
+	var pill_style := _paper_panel_style(true)
+	pill_style.bg_color = Palette.SURFACE_RAISED
+	pill_style.set_corner_radius_all(20)
+	pill_style.set_border_width_all(1)
+	pill_style.border_color = Palette.PANEL_LINE
+	pill_style.shadow_color = Palette.SHADOW_RAISED
+	# The 6 px gap under the pill only fits a shadow reach of offset 1 + size 4
+	# (the raised boxes' 7+2 = 9 px would run past the band), so the pill uses
+	# the same shadow colour with a reduced size.
+	pill_style.shadow_size = 4
+	pill_style.shadow_offset = Vector2(0, 1)
+	pill_style.content_margin_left = 14
+	pill_style.content_margin_right = 14
+	pill_style.content_margin_top = 0
+	pill_style.content_margin_bottom = 0
+	_header_pill.add_theme_stylebox_override("panel", pill_style)
+	top_host.add_child(_header_pill)
+	_layout_top_bar()
 
 	var top_hbox := HBoxContainer.new()
-	top_hbox.add_theme_constant_override("separation", 16)
-	top_panel.add_child(top_hbox)
+	top_hbox.add_theme_constant_override("separation", 8)
+	_header_pill.add_child(top_hbox)
 
 	_menu_btn = Button.new()
 	_menu_btn.text = "☰"
 	_menu_btn.tooltip_text = "Menu (M)"
-	_menu_btn.custom_minimum_size = Vector2(44, 40)
+	_menu_btn.custom_minimum_size = Vector2(44, 34)
+	_menu_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_menu_btn.add_theme_font_size_override("font_size", 18)
 	_style_button(_menu_btn, "ghost")
 	_menu_popup = PopupMenu.new()
@@ -500,7 +524,8 @@ func _build_ui() -> void:
 	_help_costs_btn = Button.new()
 	_help_costs_btn.text = "?"
 	_help_costs_btn.tooltip_text = "Build costs"
-	_help_costs_btn.custom_minimum_size = Vector2(40, 40)
+	_help_costs_btn.custom_minimum_size = Vector2(40, 34)
+	_help_costs_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_help_costs_btn.add_theme_font_size_override("font_size", 18)
 	_style_button(_help_costs_btn, "ghost")
 	_help_costs_btn.pressed.connect(_open_costs_popup)
@@ -508,7 +533,8 @@ func _build_ui() -> void:
 	_results_btn = Button.new()
 	_results_btn.text = "Results"
 	_results_btn.tooltip_text = "Show the final standings"
-	_results_btn.custom_minimum_size = Vector2(70, 40)
+	_results_btn.custom_minimum_size = Vector2(70, 34)
+	_results_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_results_btn.add_theme_font_size_override("font_size", 13)
 	_style_button(_results_btn, "ghost")
 	_results_btn.visible = false
@@ -525,6 +551,7 @@ func _build_ui() -> void:
 	title_lbl.text = "Founders: Barter & Block"
 	title_lbl.add_theme_font_size_override("font_size", 18)
 	title_lbl.add_theme_color_override("font_color", Palette.HEADING)
+	title_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	top_hbox.add_child(title_lbl)
 
 	_status_banner_label = Label.new()
@@ -533,24 +560,29 @@ func _build_ui() -> void:
 	_status_banner_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_set_banner("Your turn — click the dice to roll.")
 	_status_banner_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_status_banner_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_status_banner_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_status_banner_label.add_theme_font_size_override("font_size", 16)
 	_status_banner_label.add_theme_color_override("font_color", Palette.TEXT)
 	top_hbox.add_child(_status_banner_label)
 
 	_phase_label = Label.new()
-	_phase_label.custom_minimum_size = Vector2(72, 0)
+	_phase_label.custom_minimum_size = Vector2(58, 0)
 	_phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_phase_label.text = "Turn 1"
 	_phase_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_phase_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_phase_label.add_theme_font_size_override("font_size", 13)
-	_phase_label.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	# p36: on the raised pill the muted colour drops to 3.9:1 in Dark, so the
+	# turn counter uses the full text colour.
+	_phase_label.add_theme_color_override("font_color", Palette.TEXT)
 	top_hbox.add_child(_phase_label)
 
 	_step_top_btn = Button.new()
 	_step_top_btn.text = "Step bot"
 	_step_top_btn.tooltip_text = "Make the current bot take one action"
-	_step_top_btn.custom_minimum_size = Vector2(0, 36)
+	_step_top_btn.custom_minimum_size = Vector2(0, 34)
+	_step_top_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_step_top_btn.add_theme_font_size_override("font_size", 13)
 	_style_button(_step_top_btn, "ghost")
 	_step_top_btn.visible = false
@@ -559,7 +591,7 @@ func _build_ui() -> void:
 
 	_style_btn = Button.new()
 	_style_btn.text = ""
-	_style_btn.custom_minimum_size = Vector2(44, 40)
+	_style_btn.custom_minimum_size = Vector2(44, 34)
 	_style_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_style_btn.expand_icon = false
 	_style_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -633,11 +665,15 @@ func _build_ui() -> void:
 	right_style.border_width_top = 0
 	right_style.border_width_right = 0
 	right_style.border_width_bottom = 0
-	right_style.border_width_left = 3
-	right_style.content_margin_left = 12
-	right_style.content_margin_right = 12
-	right_style.content_margin_top = 10
-	right_style.content_margin_bottom = 10
+	right_style.border_width_left = 1
+	right_style.border_color = Palette.PANEL_LINE
+	# The 12/10 px insets moved from the panel stylebox to the sidebar box's
+	# theme margins, so the scroll viewport (the shadow clip) now spans the
+	# whole panel while every box keeps its exact global rect.
+	right_style.content_margin_left = 0
+	right_style.content_margin_right = 0
+	right_style.content_margin_top = 0
+	right_style.content_margin_bottom = 0
 	right_panel.add_theme_stylebox_override("panel", right_style)
 	_center_split.add_child(right_panel)
 
@@ -656,7 +692,21 @@ func _build_ui() -> void:
 	sidebar_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	sidebar_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	right_panel.add_child(sidebar_scroll)
-	sidebar_scroll.add_child(right_vbox)
+	# The 12/10 px insets live on this empty-stylebox wrapper instead of the
+	# panel stylebox, so the scroll viewport (which clips drawing) spans the
+	# whole panel and the raised boxes' drop shadows have room to render
+	# while every box keeps its exact global rect.
+	var sidebar_inset := PanelContainer.new()
+	sidebar_inset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sidebar_inset.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var inset_style := StyleBoxEmpty.new()
+	inset_style.content_margin_left = 12
+	inset_style.content_margin_right = 12
+	inset_style.content_margin_top = 10
+	inset_style.content_margin_bottom = 10
+	sidebar_inset.add_theme_stylebox_override("panel", inset_style)
+	sidebar_scroll.add_child(sidebar_inset)
+	sidebar_inset.add_child(right_vbox)
 
 	_hand_overlay = Control.new()
 	_hand_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -778,12 +828,18 @@ func _build_ui() -> void:
 	_log_toggle_btn.custom_minimum_size = Vector2(28, 28)
 	_log_toggle_btn.expand_icon = true
 	_style_button(_log_toggle_btn, "ghost")
-	_log_toggle_btn.add_theme_color_override("icon_modulate", _log_toggle_btn.get_theme_color("font_color"))
-	_log_toggle_btn.add_theme_color_override("icon_modulate:disabled", _log_toggle_btn.get_theme_color("font_disabled_color"))
 	_log_toggle_btn.toggled.connect(_set_log_open)
 	log_header.add_child(_log_toggle_btn)
 
-	_log_panel = _make_card_panel(Palette.PANEL_BG_ALT)
+	_log_panel = _make_card_panel(Palette.SURFACE_RAISED)
+	var log_st := (_log_panel.get_theme_stylebox("panel") as StyleBoxFlat).duplicate() as StyleBoxFlat
+	log_st.border_color = Palette.PANEL_LINE
+	log_st.set_border_width_all(1)
+	log_st.set_corner_radius_all(8)
+	log_st.shadow_color = Palette.SHADOW_RAISED
+	log_st.shadow_size = 7
+	log_st.shadow_offset = Vector2(0, 2)
+	_log_panel.add_theme_stylebox_override("panel", log_st)
 	_log_panel.custom_minimum_size = Vector2(0, 64)
 	right_vbox.add_child(_log_panel)
 
@@ -818,7 +874,8 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	st.border_width_left = 0
 	st.border_width_right = 0
 	st.border_width_bottom = 0
-	st.border_width_top = 3
+	st.border_width_top = 1
+	st.border_color = Palette.PANEL_LINE
 	st.content_margin_left = 10
 	st.content_margin_right = 10
 	st.content_margin_top = 6
@@ -976,8 +1033,6 @@ func _build_hand_bar(root_vbox: VBoxContainer) -> void:
 	_end_turn_btn.custom_minimum_size = Vector2(130, 52)
 	_end_turn_btn.add_theme_font_size_override("font_size", 16)
 	_end_turn_btn.tooltip_text = "End your turn (E)"
-	_end_turn_btn.add_theme_color_override("icon_modulate", _end_turn_btn.get_theme_color("font_color"))
-	_end_turn_btn.add_theme_color_override("icon_modulate:disabled", _end_turn_btn.get_theme_color("font_disabled_color"))
 	_end_turn_btn.disabled = true
 	_end_turn_btn.pressed.connect(_on_end_turn_pressed)
 	_guard_action_button_focus(_end_turn_btn)
@@ -1172,7 +1227,7 @@ func _build_lobby_overlay() -> void:
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_lobby_overlay.add_child(center)
 
-	var modal := _make_card_panel(Palette.PANEL_BG)
+	var modal := _make_card_panel(Palette.PANEL_BG, true)
 	modal.custom_minimum_size = Vector2(460, 380)
 	center.add_child(modal)
 
@@ -1212,9 +1267,8 @@ func _build_lobby_overlay() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 10)
 		vbox.add_child(row)
-		var sw := ColorRect.new()
-		sw.custom_minimum_size = Vector2(18, 18)
-		sw.color = GameTypes.PLAYER_COLORS[i]
+		var sw := _make_seat_swatch(Vector2(18, 18))
+		_set_seat_swatch_color(sw, GameTypes.PLAYER_COLORS[i])
 		row.add_child(sw)
 		var s_lbl := Label.new()
 		s_lbl.text = "Seat %d (%s):" % [i + 1, GameTypes.PLAYER_NAMES[i]]
@@ -1321,8 +1375,8 @@ func _build_costs_popup() -> void:
 	_costs_popup = PanelContainer.new()
 	var st := _paper_panel_style(true)
 	st.set_corner_radius_all(9)
-	st.set_border_width_all(2)
-	st.border_color = Palette.ACCENT_GOLD_BORDER
+	st.set_border_width_all(1)
+	st.border_color = Palette.PANEL_LINE
 	st.shadow_color = Palette.PAPER_SHADOW
 	st.shadow_size = 5
 	st.content_margin_left = 10
@@ -1463,12 +1517,7 @@ func _style_toggle_icon() -> ImageTexture:
 				return true
 		return false
 	var tex := _make_icon_tex(40, 20.0, paint)
-	var img := tex.get_image()
-	var tint := Palette.BUTTON_TEXT
-	for py in range(img.get_height()):
-		for px in range(img.get_width()):
-			var a := img.get_pixel(px, py).a
-			img.set_pixel(px, py, Color(tint.r * a, tint.g * a, tint.b * a, a))
+	var img: Image = tex.get_image().duplicate()
 	img.resize(20, 20)
 	return ImageTexture.create_from_image(img)
 
@@ -1518,8 +1567,8 @@ func _build_splash_overlay() -> void:
 	var panel := PanelContainer.new()
 	var st := _paper_panel_style(true)
 	st.set_corner_radius_all(12)
-	st.set_border_width_all(3)
-	st.border_color = Palette.ACCENT_GOLD_BORDER_SOFT
+	st.set_border_width_all(1)
+	st.border_color = Palette.PANEL_LINE
 	st.shadow_color = Palette.PAPER_SHADOW
 	st.shadow_size = 10
 	st.content_margin_left = 22
@@ -1640,9 +1689,8 @@ func _show_splash(state: GameState) -> void:
 		rank_lbl.add_theme_font_size_override("font_size", 14)
 		rank_lbl.add_theme_color_override("font_color", Palette.HEADING)
 		hbox.add_child(rank_lbl)
-		var sw := ColorRect.new()
-		sw.custom_minimum_size = Vector2(10, 22)
-		sw.color = GameTypes.PLAYER_COLORS[pid]
+		var sw := _make_seat_swatch(Vector2(10, 22))
+		_set_seat_swatch_color(sw, GameTypes.PLAYER_COLORS[pid])
 		hbox.add_child(sw)
 		var seat_kind := "AI"
 		if pid < session.seats.size() and not session.seats[pid].is_ai():
@@ -1729,7 +1777,7 @@ func _build_settings_overlay() -> void:
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_settings_overlay.add_child(center)
 
-	var modal := _make_card_panel(Palette.PANEL_BG)
+	var modal := _make_card_panel(Palette.PANEL_BG, true)
 	modal.custom_minimum_size = Vector2(500, 0)
 	center.add_child(modal)
 
@@ -1899,7 +1947,7 @@ func _build_help_overlay() -> void:
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_help_overlay.add_child(center)
 
-	var modal := _make_card_panel(Palette.PANEL_BG)
+	var modal := _make_card_panel(Palette.PANEL_BG, true)
 	modal.custom_minimum_size = Vector2(560, 380)
 	center.add_child(modal)
 
@@ -2199,6 +2247,15 @@ func set_ui_style(id: String) -> void:
 	# a theme override or a script colour that the walk above already carried over.
 	if _check_theme != null:
 		_build_check_theme()
+	_build_ui_theme()
+	for optn in find_children("*", "OptionButton", true, false):
+		_style_option(optn as OptionButton)
+	if _log_toggle_btn != null and is_instance_valid(_log_toggle_btn):
+		_style_button(_log_toggle_btn, "ghost")
+	if _style_btn != null and is_instance_valid(_style_btn):
+		_style_button(_style_btn, "ghost")
+	if _review_slider_ticks != null and is_instance_valid(_review_slider_ticks):
+		_review_slider_ticks.queue_redraw()
 	for toast_label in _toast_labels:
 		if is_instance_valid(toast_label) and toast_label.has_meta("toast_tint"):
 			var tint := Palette.remap(toast_label.get_meta("toast_tint") as Color, table)
@@ -2430,7 +2487,7 @@ func _show_toast(text: String, colour: Color, seconds: float = 3.0) -> void:
 	var st := _paper_panel_style(true)
 	st.bg_color = Palette.TOAST_PILL_BG
 	st.set_corner_radius_all(8)
-	st.set_border_width_all(2)
+	st.set_border_width_all(1)
 	st.border_color = colour.darkened(0.15)
 	st.shadow_color = Palette.PAPER_SHADOW
 	st.shadow_size = 4
@@ -2487,9 +2544,25 @@ func _toast_text_on_pill(col: Color) -> Color:
 	var min_contrast := float(Palette.style_option("toast_text_min_contrast", 0.0))
 	if min_contrast <= 0.0:
 		return col
-	if _pill_text_ratio(col, Palette.TOAST_PILL_BG) >= min_contrast:
-		return col
-	return col.lerp(Palette.INK, 0.62)
+	var out := col
+	var step := 0.0
+	while step < 1.0 and _pill_text_ratio(out, Palette.TOAST_PILL_BG) < min_contrast:
+		step = minf(1.0, step + 0.04)
+		out = col.lerp(Palette.INK, step)
+	return out
+
+
+func _vp_badge_colors(pcol: Color) -> Array[Color]:
+	if _pill_text_ratio(Palette.BADGE_TEXT, pcol) >= 4.5:
+		return [pcol, Palette.BADGE_TEXT]
+	if _pill_text_ratio(Color.WHITE, pcol) >= 4.5:
+		return [pcol, Color.WHITE]
+	var fill := pcol
+	var step := 0.0
+	while step < 1.0 and _pill_text_ratio(Color.WHITE, fill) < 4.65:
+		step = minf(1.0, step + 0.01)
+		fill = pcol.lerp(Palette.BADGE_TEXT, step)
+	return [fill, Color.WHITE]
 
 
 func _pill_text_ratio(fg: Color, bg: Color) -> float:
@@ -3574,6 +3647,8 @@ func _seat_display_name(pid: int) -> String:
 	return str(session.state.players[pid].get("name", GameTypes.PLAYER_NAMES[pid]))
 
 func _compute_instruction(state: GameState, acting_id: int, human_acting: bool) -> String:
+	if not _steal_pending.is_empty():
+		return "Click a marked player to steal from, or click another hex — keys 1-%d, Esc picks another tile" % _steal_victims.size()
 	if state.phase == GameTypes.TurnPhase.GAME_OVER:
 		if state.winner != -1:
 			return "%s wins!" % GameTypes.PLAYER_NAMES[state.winner]
@@ -3650,14 +3725,15 @@ func _reset_scoreboard_rows() -> void:
 	_scoreboard_played.clear()
 
 func _build_scoreboard_row(slot: Control) -> Dictionary:
-	var card := _make_compact_card(Palette.PANEL_BG)
+	var card := _make_compact_card(Palette.ROW_BG)
 	card.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	slot.add_child(card)
 	var st := (card.get_theme_stylebox("panel") as StyleBoxFlat).duplicate()
 	st.set_border_width_all(3)
 	st.border_color = Color(0, 0, 0, 0)
-	st.shadow_color = Color(0, 0, 0, 0)
-	st.shadow_size = 2
+	st.shadow_color = Palette.ROW_SHADOW
+	st.shadow_size = 3
+	st.shadow_offset = Vector2(0, 1)
 	card.add_theme_stylebox_override("panel", st)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -3699,7 +3775,7 @@ func _build_scoreboard_row(slot: Control) -> Dictionary:
 	seat_cell.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	seat_cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	seat_w.add_child(seat_cell)
-	var seat_pill := _make_pill("", Color(Palette.PANEL_BORDER, 0.28), Palette.TEXT_MUTED)
+	var seat_pill := _make_pill("", Color(Palette.PANEL_BORDER, 0.28), Palette.TEXT)
 	seat_cell.add_child(seat_pill)
 	var res_w := Control.new()
 	res_w.custom_minimum_size = Vector2(52, 26)
@@ -3780,12 +3856,12 @@ func _sync_scoreboard_rows(state: GameState, view_pid: int, human_seat_n: int, a
 		var pcol: Color = GameTypes.PLAYER_COLORS[p_id % GameTypes.PLAYER_COLORS.size()]
 		var card: PanelContainer = parts["card"]
 		var st: StyleBoxFlat = parts["style"]
-		st.bg_color = Palette.PANEL_BG_ALT if is_active else Palette.PANEL_BG
+		st.bg_color = Palette.ROW_BG_ACTIVE if is_active else Palette.ROW_BG
 		st.border_color = Color(0, 0, 0, 0)
-		st.shadow_color = Color(0, 0, 0, 0)
+		st.shadow_color = Palette.ROW_SHADOW
 		var tw: Tween = parts["tween"]
 		tw.pause()
-		st.shadow_size = 2
+		st.shadow_size = 3
 		if p_id == focus_pid:
 			_sb_focus_card = card
 			_sb_focus_pcol = pcol
@@ -3803,9 +3879,9 @@ func _sync_scoreboard_rows(state: GameState, view_pid: int, human_seat_n: int, a
 				]
 		badge.text = badge_text
 		badge.tooltip_text = tip_vp
-		bst.bg_color = pcol
-		var lum := pcol.r * 0.299 + pcol.g * 0.587 + pcol.b * 0.114
-		badge.add_theme_color_override("font_color", Color.WHITE if lum < 0.55 else Palette.BADGE_TEXT)
+		var badge_pair := _vp_badge_colors(pcol)
+		bst.bg_color = badge_pair[0]
+		badge.add_theme_color_override("font_color", badge_pair[1])
 		(parts["name"] as Label).text = ("▶ " if is_active else "") + str(p_data.get("name", GameTypes.PLAYER_NAMES[p_id]))
 		(parts["seat"] as Label).text = _seat_type_label(seat_cfg)
 		var res_stack: MiniHandStack = parts["res"]
@@ -3846,7 +3922,7 @@ func _sync_scoreboard_rows(state: GameState, view_pid: int, human_seat_n: int, a
 		if state.longest_route_holder == p_id:
 			played.add_child(_make_pill("Route +2", Color(Palette.ACCENT_GREEN, 0.40), Palette.TEXT))
 		if state.largest_guard_holder == p_id:
-			played.add_child(_make_pill("Guard +2", Color(Palette.MOUNTAIN_SHADE, 0.40), Palette.TEXT))
+			played.add_child(_make_pill("Guard +2", Palette.AWARD_GUARD_PILL_BG, Palette.AWARD_GUARD_PILL_TEXT))
 		_scoreboard_row_panels[p_id] = card
 		_scoreboard_mini_hands[p_id] = res_stack
 		_scoreboard_mini_acts[p_id] = act_stack
@@ -4142,10 +4218,12 @@ func _refresh_ui() -> void:
 		_end_turn_btn.add_theme_color_override("font_color", Palette.BUTTON_TEXT_ON_GREEN)
 		_end_turn_btn.add_theme_color_override("font_hover_color", Palette.BUTTON_TEXT_ON_GREEN)
 		_end_turn_btn.add_theme_color_override("font_pressed_color", Palette.BUTTON_TEXT_ON_GREEN)
+		_end_turn_btn.add_theme_color_override("icon_normal_color", Palette.BUTTON_TEXT_ON_GREEN)
+		_end_turn_btn.add_theme_color_override("icon_hover_color", Palette.BUTTON_TEXT_ON_GREEN)
+		_end_turn_btn.add_theme_color_override("icon_pressed_color", Palette.BUTTON_TEXT_ON_GREEN)
+		_end_turn_btn.add_theme_color_override("icon_hover_pressed_color", Palette.BUTTON_TEXT_ON_GREEN)
 	else:
 		_style_button(_end_turn_btn, "normal")
-	_end_turn_btn.add_theme_color_override("icon_modulate", _end_turn_btn.get_theme_color("font_color"))
-	_end_turn_btn.add_theme_color_override("icon_modulate:disabled", _end_turn_btn.get_theme_color("font_disabled_color"))
 
 	_refresh_offer_strip(state)
 	_refresh_trade_tray(state, acting_id, human_acting)
@@ -4174,6 +4252,8 @@ func _refresh_ui() -> void:
 
 
 func _update_mandatory_board_highlights(state: GameState, acting_id: int, human_acting: bool) -> void:
+	if not _steal_pending.is_empty():
+		return
 	if not human_acting:
 		_cancel_build_bubble()
 		_board_view.clear_highlights()
@@ -4795,15 +4875,15 @@ func _on_subpanel_scrim_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------------
 func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_slot = PanelContainer.new()
-	var sst := _paper_panel_style(true)
-	sst.set_corner_radius_all(10)
-	sst.set_border_width_all(2)
-	sst.border_color = Palette.PANEL_BORDER
-	sst.shadow_size = 0
-	sst.content_margin_left = 7
-	sst.content_margin_right = 7
-	sst.content_margin_top = 4
-	sst.content_margin_bottom = 4
+	# p34r: the slot clips (its min-size keeps the EVENT LOG below from moving),
+	# so the card itself is drawn by a child Panel inset from the slot's bottom
+	# by the raised shadow's reach (7 px size + 2 px offset). That keeps the
+	# shadow inside the clip rect instead of cutting it off square.
+	var sst := StyleBoxEmpty.new()
+	sst.content_margin_left = 8
+	sst.content_margin_right = 8
+	sst.content_margin_top = 5
+	sst.content_margin_bottom = 5
 	_trade_slot.add_theme_stylebox_override("panel", sst)
 	_trade_slot.clip_contents = true
 	_trade_slot.custom_minimum_size = Vector2(0, 214)
@@ -4811,6 +4891,18 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_host = Control.new()
 	_trade_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_trade_slot.add_child(_trade_host)
+	_trade_frame = Panel.new()
+	_trade_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sst2 := _paper_panel_style(true)
+	sst2.bg_color = Palette.SURFACE_RAISED
+	sst2.set_corner_radius_all(8)
+	sst2.set_border_width_all(1)
+	sst2.border_color = Palette.PANEL_LINE
+	sst2.shadow_color = Palette.SHADOW_RAISED
+	sst2.shadow_size = 7
+	sst2.shadow_offset = Vector2(0, 2)
+	_trade_frame.add_theme_stylebox_override("panel", sst2)
+	_trade_host.add_child(_trade_frame)
 	_trade_slot.resized.connect(_layout_trade_slot)
 	_trade_idle_lbl = Label.new()
 	_trade_idle_lbl.text = ""
@@ -4819,7 +4911,7 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_idle_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_trade_idle_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_trade_idle_lbl.add_theme_font_size_override("font_size", 12)
-	_trade_idle_lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	_trade_idle_lbl.add_theme_color_override("font_color", Palette.TEXT)
 	_trade_idle_lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_trade_host.add_child(_trade_idle_lbl)
 	_trade_tray = PanelContainer.new()
@@ -4827,8 +4919,9 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_tray.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_trade_tray.size_flags_vertical = Control.SIZE_FILL
 	var st := _paper_panel_style(true)
-	st.set_corner_radius_all(10)
-	st.set_border_width_all(2)
+	st.bg_color = Palette.SURFACE_RAISED
+	st.set_corner_radius_all(8)
+	st.set_border_width_all(0)
 	st.border_color = Color(0, 0, 0, 0)
 	st.shadow_size = 0
 	st.content_margin_left = 0
@@ -4940,7 +5033,7 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_respond_row.add_child(_ot_counter_btn)
 	_trade_have_label = Label.new()
 	_trade_have_label.add_theme_font_size_override("font_size", 10)
-	_trade_have_label.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	_trade_have_label.add_theme_color_override("font_color", Palette.TEXT)
 	_trade_have_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_trade_have_label.custom_minimum_size = Vector2(280, 0)
 	_trade_have_label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
@@ -4966,7 +5059,7 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_btn_row.add_child(_trade_clear_btn)
 	_trade_offers_lbl = Label.new()
 	_trade_offers_lbl.add_theme_font_size_override("font_size", 10)
-	_trade_offers_lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	_trade_offers_lbl.add_theme_color_override("font_color", Palette.TEXT)
 	_trade_offers_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_trade_offers_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_trade_offers_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -5047,7 +5140,7 @@ func _build_one_band(ctx: String, cap_a: String, cap_b: String, host: Control) -
 	var arrow := Label.new()
 	arrow.text = "\u2192"
 	arrow.add_theme_font_size_override("font_size", 14)
-	arrow.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	arrow.add_theme_color_override("font_color", Palette.TEXT)
 	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	side.add_child(arrow)
@@ -5231,7 +5324,7 @@ func _fill_ro_row(box: HBoxContainer, bundle: Dictionary, missing: Dictionary) -
 		var none := Label.new()
 		none.text = "nothing"
 		none.add_theme_font_size_override("font_size", 12)
-		none.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+		none.add_theme_color_override("font_color", Palette.TEXT)
 		none.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		none.visible = false
 		box.add_child(none)
@@ -5281,7 +5374,7 @@ func _build_trade_card_rows() -> void:
 	_trade_give_hint_lbl = Label.new()
 	_trade_give_hint_lbl.text = "Click your cards below"
 	_trade_give_hint_lbl.add_theme_font_size_override("font_size", 10)
-	_trade_give_hint_lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+	_trade_give_hint_lbl.add_theme_color_override("font_color", Palette.TEXT)
 	_trade_give_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_trade_give_hint_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_trade_give_hint_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -5616,8 +5709,8 @@ func _build_log_popup() -> void:
 	_log_popup.mouse_filter = Control.MOUSE_FILTER_STOP
 	var st := _paper_panel_style(true)
 	st.set_corner_radius_all(10)
-	st.set_border_width_all(2)
-	st.border_color = Palette.PANEL_BORDER
+	st.set_border_width_all(1)
+	st.border_color = Palette.PANEL_LINE
 	st.shadow_color = Palette.PAPER_SHADOW
 	st.shadow_size = 6
 	st.content_margin_left = 10
@@ -5679,6 +5772,19 @@ func _on_window_resized() -> void:
 	_layout_needs_apply = true
 	_apply_window_layout()
 
+func _top_bar_margin(width: float) -> float:
+	return clampf(width * 0.0375, 24.0, 96.0)
+
+func _layout_top_bar() -> void:
+	if _header_panel == null or _header_pill == null:
+		return
+	var w := _header_panel.size.x
+	if w <= 0.0:
+		return
+	var m := _top_bar_margin(w)
+	_header_pill.position = Vector2(m, 6.0)
+	_header_pill.size = Vector2(maxf(w - 2.0 * m, 80.0), 40.0)
+
 func _apply_window_layout() -> void:
 	if _right_panel == null:
 		return
@@ -5720,91 +5826,37 @@ func _apply_window_layout() -> void:
 		pad = lcs.content_margin_top + lcs.content_margin_bottom + 2.0
 	var avail: float = content_h - others
 	var log_target := 4.0 * line_h + pad
-	var log_h: float = log_target if avail - log_target >= 150.0 else maxf(64.0, minf(log_target, avail - 150.0))
-	_side_trade_budget = avail - log_h
-	var trade_h: float = _trade_slot_height(_side_trade_budget)
+	# One trade slot height per window size (never content-driven), so the
+	# EVENT LOG below it never moves while the trade panel changes states.
+	# 192 px is the tallest trade view (the offer editor), so the log gives
+	# ground first (floor 57 px, it scrolls internally) and the two always
+	# sum to `avail`, which keeps the sidebar itself scroll-free.
+	var log_h: float = clampf(avail - 192.0, 57.0, log_target)
+	var trade_h: float = avail - log_h
 	_sync_toast_host_rect()
 	if _scoreboard_box != null:
 		_scoreboard_box.custom_minimum_size = Vector2(0, sb_h)
 	if _trade_slot != null:
 		_trade_slot.custom_minimum_size = Vector2(0, trade_h)
-	_arm_trade_slot_sync()
 	if _log_panel != null:
 		_log_panel.custom_minimum_size = Vector2(0, log_h)
 	_layout_hand_overlay()
 	_layout_log_popup()
 	_update_scoreboard_focus_overlay()
 
-func _trade_slot_need() -> float:
-	# What the panel content actually needs, plus the slot frame. Views that
-	# need less than the 192 px editor floor (respond, revise) stop eating
-	# sidebar pixels the log and bank could use.
-	if _trade_slot == null or not _trade_slot.visible or _trade_content == null:
-		return 192.0
-	# +15: the tray inset (4+4) plus the panel chrome between tray and
-	# scroll viewport, plus slack so a panel that "just fits" does not
-	# conjure an internal scrollbar (an exact-equal viewport does scroll).
-	return maxf(120.0, _trade_content.get_combined_minimum_size().y + 15.0)
-
-func _trade_slot_height(budget: float) -> float:
-	var need := _trade_slot_need()
-	if budget >= 192.0:
-		return maxf(budget, minf(need, 192.0))
-	if need > 204.0:
-		# The content does not even fit the full-size slot (e.g. an own
-		# offer with several counters): take what is left and let the
-		# panel's own scroll carry the rest, instead of pushing the whole
-		# sidebar into a scrollbar.
-		return maxf(120.0, budget)
-	# Content fits (with slack) inside the full 192 px slot: size the slot
-	# to the content. Views that need less than the budget (respond,
-	# revise) hand the difference back so the sidebar never scrolls; an
-	# editor that needs slightly more than the budget keeps its 192 px
-	# floor instead of scrolling cards internally.
-	return clampf(need, 120.0, 192.0)
-
-func _arm_trade_slot_sync() -> void:
-	# Restarts the per-frame tracking after anything can have changed the
-	# panel content (rebuilds) or the budget (window layout).
-	_slot_sync_stable = 0
-	if _trade_slot == null or not is_instance_valid(_trade_slot) or not is_inside_tree():
-		return
-	if not get_tree().process_frame.is_connected(_sync_trade_slot_height):
-		get_tree().process_frame.connect(_sync_trade_slot_height, CONNECT_ONE_SHOT)
-
-func _sync_trade_slot_height() -> void:
-	if _trade_slot == null or not is_instance_valid(_trade_slot):
-		return
-	if _side_trade_budget > 0.0:
-		var want := _trade_slot_height(_side_trade_budget)
-		if not is_equal_approx(want, _trade_slot.custom_minimum_size.y):
-			_trade_slot.custom_minimum_size = Vector2(0, want)
-			_slot_sync_stable = 0
-		else:
-			_slot_sync_stable += 1
-	# Panel content settles over several deferred passes (chip retune, card
-	# rebuild); re-check each frame so the slot tracks it, but stop the
-	# chain once the height has held for 10 frames. Rebuilds and window
-	# layout re-arm it. Riding the tree signal (one-shot, re-armed) means a
-	# freed UI drops the chain instead of leaving a callback pending on a
-	# dead object.
-	if _slot_sync_stable >= 10:
-		return
-	if is_inside_tree() and not get_tree().process_frame.is_connected(_sync_trade_slot_height):
-		get_tree().process_frame.connect(_sync_trade_slot_height, CONNECT_ONE_SHOT)
-
 func _layout_trade_slot() -> void:
-	if _trade_slot == null or _trade_tray == null:
+	if _trade_slot == null or _trade_tray == null or _trade_frame == null:
 		return
-	var cs := _trade_slot.get_theme_stylebox("panel") as StyleBoxFlat
-	var m := Vector2(7, 4)
-	if cs != null:
-		m = Vector2(
-			cs.content_margin_left + cs.border_width_left,
-			cs.content_margin_top + cs.border_width_top
-		)
-	_trade_tray.position = m
-	_trade_tray.size = _trade_slot.size - m * 2.0
+	# p34r: the frame paints the card (fill, 1 px line, radius 8, drop shadow)
+	# inset 9 px (= shadow size 7 + offset 2) from the slot's bottom so its
+	# shadow stays inside the slot's clip rect. Top/left/right keep the p34
+	# pixel positions. The tray keeps its 478 px width and moves 3 px up; at
+	# slot_height-15 it still clears the 176 px worst-case (5+5) editor and
+	# ends 2 px above the frame's bottom line.
+	_trade_frame.position = Vector2(-8.0, -5.0)
+	_trade_frame.size = _trade_slot.size - Vector2(0.0, 9.0)
+	_trade_tray.position = Vector2(8.0, -2.0)
+	_trade_tray.size = _trade_slot.size - Vector2(18.0, 15.0)
 
 func _layout_hand_overlay() -> void:
 	if _hand_overlay == null or _hand_bar_panel == null:
@@ -5818,6 +5870,8 @@ func _build_offer_strip(root_vbox: VBoxContainer) -> void:
 	_offer_strip = PanelContainer.new()
 	var st := _paper_panel_style(true)
 	st.set_corner_radius_all(0)
+	st.set_border_width_all(1)
+	st.border_color = Palette.PANEL_LINE
 	st.shadow_size = 0
 	st.content_margin_left = 10
 	st.content_margin_right = 10
@@ -6212,9 +6266,6 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 		_set_tray_panel_visible(false)
 	_refresh_trade_idle_hint()
 	_apply_trade_rail_width()
-	# Sizes the slot to the rebuilt panel and tracks it per frame until the
-	# content stops moving (min sizes settle over deferred passes).
-	_arm_trade_slot_sync()
 
 func _rebuild_partner_cards(state: GameState, ot: Dictionary, ot_open: bool, human_can_pick: bool, _show_bank: bool) -> void:
 	if _trade_partner_stack == null:
@@ -6408,11 +6459,9 @@ func _rebuild_result_rows() -> void:
 		var pname := str(session.state.players[pid].get("name", GameTypes.PLAYER_NAMES[pid]))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 5)
-		var sw := ColorRect.new()
-		sw.custom_minimum_size = Vector2(10, 10)
-		sw.color = GameTypes.PLAYER_COLORS[pid]
+		var sw := _make_seat_swatch(Vector2(10, 10))
 		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		sw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_set_seat_swatch_color(sw, GameTypes.PLAYER_COLORS[pid])
 		row.add_child(sw)
 		var name_lbl := Label.new()
 		name_lbl.text = pname
@@ -6442,7 +6491,7 @@ func _rebuild_result_rows() -> void:
 				lbl.add_theme_color_override("font_color", Palette.STATUS_WARN_TEXT)
 			_:
 				lbl.text = "Waiting\u2026"
-				lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+				lbl.add_theme_color_override("font_color", Palette.TEXT)
 		row.add_child(lbl)
 		_watch_rows_col.add_child(row)
 
@@ -6481,11 +6530,9 @@ func _rebuild_watch_rows(state: GameState, ot: Dictionary, for_respond: bool) ->
 		var pname := str(p_data.get("name", GameTypes.PLAYER_NAMES[p_id]))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 5)
-		var sw := ColorRect.new()
-		sw.custom_minimum_size = Vector2(10, 10)
-		sw.color = GameTypes.PLAYER_COLORS[p_id]
+		var sw := _make_seat_swatch(Vector2(10, 10))
 		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		sw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_set_seat_swatch_color(sw, GameTypes.PLAYER_COLORS[p_id])
 		row.add_child(sw)
 		var name_lbl := Label.new()
 		name_lbl.text = pname
@@ -6514,7 +6561,7 @@ func _rebuild_watch_rows(state: GameState, ot: Dictionary, for_respond: bool) ->
 			var wait_lbl := Label.new()
 			wait_lbl.text = "Waiting\u2026"
 			wait_lbl.add_theme_font_size_override("font_size", 11)
-			wait_lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+			wait_lbl.add_theme_color_override("font_color", Palette.TEXT)
 			wait_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			wait_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			row.add_child(wait_lbl)
@@ -6605,7 +6652,7 @@ func _rebuild_watch_rows(state: GameState, ot: Dictionary, for_respond: bool) ->
 					var dash_lbl := Label.new()
 					dash_lbl.text = "\u2014"
 					dash_lbl.add_theme_font_size_override("font_size", 11)
-					dash_lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
+					dash_lbl.add_theme_color_override("font_color", Palette.TEXT)
 					dash_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 					row.add_child(dash_lbl)
 			new_status[p_id] = str(resp.get("status", ""))
@@ -6645,13 +6692,29 @@ func _missing_for_bundle(state: GameState, bundle: Dictionary) -> Dictionary:
 	return missing
 
 
+func _make_seat_swatch(min_size: Vector2) -> Panel:
+	var sw := Panel.new()
+	sw.custom_minimum_size = min_size
+	sw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return sw
+
+func _set_seat_swatch_color(sw: Control, col: Color) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = col
+	sb.border_color = Palette.INK_OUTLINE
+	sb.set_border_width_all(1)
+	sw.add_theme_stylebox_override("panel", sb)
+
 func _make_partner_panel(pname: String, swatch_color: Color, border: Color, badge_pid: int = -1, badge_col: Color = Color(0, 0, 0, -1)) -> Array:
 	var card := PanelContainer.new()
 	var cst := _paper_panel_style(true)
+	cst.bg_color = Palette.ROW_BG
 	cst.set_corner_radius_all(7)
 	cst.set_border_width_all(1)
 	cst.border_color = border
-	cst.shadow_color = Color(0, 0, 0, 0)
+	cst.shadow_color = Palette.ROW_SHADOW
+	cst.shadow_size = 3
+	cst.shadow_offset = Vector2(0, 1)
 	cst.content_margin_left = 5
 	cst.content_margin_right = 5
 	cst.content_margin_top = 2
@@ -6665,11 +6728,9 @@ func _make_partner_panel(pname: String, swatch_color: Color, border: Color, badg
 	var row1 := HBoxContainer.new()
 	row1.add_theme_constant_override("separation", 5)
 	col.add_child(row1)
-	var sw := ColorRect.new()
-	sw.custom_minimum_size = Vector2(10, 10)
-	sw.color = swatch_color
+	var sw := _make_seat_swatch(Vector2(10, 10))
 	sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	sw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_set_seat_swatch_color(sw, swatch_color)
 	row1.add_child(sw)
 	var name_lbl := Label.new()
 	name_lbl.text = pname
@@ -7346,7 +7407,7 @@ func _style_button(btn: BaseButton, kind: String = "normal") -> void:
 	btn.add_theme_stylebox_override("pressed", st_p)
 
 	var st_d: StyleBoxFlat = st_n.duplicate() as StyleBoxFlat
-	st_d.bg_color = Palette.BUTTON_BG_DISABLED
+	st_d.bg_color = Color(Palette.PANEL_BG, 0.0) if kind == "ghost" else Palette.BUTTON_BG_DISABLED
 	st_d.border_color = Color(Palette.PANEL_BORDER, 0.5)
 	btn.add_theme_stylebox_override("disabled", st_d)
 
@@ -7361,10 +7422,35 @@ func _style_button(btn: BaseButton, kind: String = "normal") -> void:
 	btn.add_theme_color_override("font_pressed_color", fg)
 	btn.add_theme_color_override("font_focus_color", fg)
 	btn.add_theme_color_override("font_disabled_color", Palette.TEXT_MUTED)
+	btn.add_theme_color_override("icon_normal_color", fg)
+	btn.add_theme_color_override("icon_hover_color", fg)
+	btn.add_theme_color_override("icon_pressed_color", fg)
+	btn.add_theme_color_override("icon_hover_pressed_color", fg)
+	btn.add_theme_color_override("icon_focus_color", fg)
+	btn.add_theme_color_override("icon_disabled_color", Palette.TEXT_MUTED)
 
 func _style_option(opt: OptionButton) -> void:
 	_style_button(opt, "normal")
+	opt.add_theme_icon_override("arrow", _make_arrow_icon())
 	_style_popup(opt.get_popup())
+
+func _make_arrow_icon() -> ImageTexture:
+	var size := 32
+	var img := Image.create(size, size, false, Image.Format.FORMAT_RGBA8)
+	var ink := Palette.TEXT
+	var empty := Color(0, 0, 0, 0)
+	var a := Vector2(8.0, 12.5)
+	var b := Vector2(16.0, 20.0)
+	var c := Vector2(24.0, 12.5)
+	for y in range(size):
+		for x in range(size):
+			var px := Vector2(float(x) + 0.5, float(y) + 0.5)
+			if _dist_to_seg(px, a, b) < 2.2 or _dist_to_seg(px, b, c) < 2.2:
+				img.set_pixel(x, y, ink)
+			else:
+				img.set_pixel(x, y, empty)
+	img.resize(16, 16)
+	return ImageTexture.create_from_image(img)
 
 func _tighten_button_margins(btn: Button, side_margin: int) -> void:
 	for st_name in ["normal", "hover", "pressed", "disabled", "focus"]:
@@ -7432,6 +7518,42 @@ func _style_popup(p: PopupMenu) -> void:
 	p.add_theme_color_override("font_color", Palette.TEXT)
 	p.add_theme_color_override("font_hover_color", Palette.OPTION_HOVER_TEXT)
 	p.add_theme_font_size_override("font_size", 14)
+	var mark := _make_popup_mark_icon("check", 1.0)
+	var mark_d := _make_popup_mark_icon("check", 0.45)
+	p.add_theme_icon_override("check", mark)
+	p.add_theme_icon_override("check_disabled", mark_d)
+	p.add_theme_icon_override("radio_checked", _make_popup_mark_icon("radio", 1.0))
+	p.add_theme_icon_override("radio_unchecked", _make_popup_mark_icon("ring", 1.0))
+	p.add_theme_icon_override("radio_checked_disabled", _make_popup_mark_icon("radio", 0.45))
+	p.add_theme_icon_override("radio_unchecked_disabled", _make_popup_mark_icon("ring", 0.45))
+
+func _make_popup_mark_icon(kind: String, strength: float) -> ImageTexture:
+	var size := 32
+	var img := Image.create(size, size, false, Image.Format.FORMAT_RGBA8)
+	var ink := Palette.TEXT
+	ink.a = ink.a * strength
+	var empty := Color(0, 0, 0, 0)
+	for y in range(size):
+		for x in range(size):
+			var px := Vector2(float(x) + 0.5, float(y) + 0.5)
+			var col := empty
+			match kind:
+				"check":
+					var a := Vector2(5.0, 16.0)
+					var b := Vector2(13.0, 24.0)
+					var c := Vector2(27.0, 8.0)
+					if _dist_to_seg(px, a, b) < 3.2 or _dist_to_seg(px, b, c) < 3.2:
+						col = ink
+				"ring", "radio":
+					var center := Vector2(16.0, 16.0)
+					var d := px.distance_to(center)
+					if d < 11.0 and d > 7.5:
+						col = ink
+					if kind == "radio" and d < 5.0:
+						col = ink
+			img.set_pixel(x, y, col)
+	img.resize(16, 16)
+	return ImageTexture.create_from_image(img)
 
 func _style_line_edit(le: LineEdit) -> void:
 	for state_name in ["normal", "focus", "read_only"]:
@@ -7457,6 +7579,94 @@ func _style_line_edit(le: LineEdit) -> void:
 	le.add_theme_color_override("selection_foreground_color", Palette.PAPER)
 
 var _check_theme: Theme = null
+var _ui_theme: Theme = null
+
+func _build_ui_theme() -> void:
+	if _ui_theme == null:
+		_ui_theme = Theme.new()
+	var tip := StyleBoxFlat.new()
+	tip.bg_color = Palette.SURFACE_RAISED
+	tip.border_color = Palette.PANEL_LINE
+	tip.set_border_width_all(1)
+	tip.set_corner_radius_all(3)
+	tip.content_margin_left = 4
+	tip.content_margin_right = 4
+	tip.content_margin_top = 2
+	tip.content_margin_bottom = 2
+	_ui_theme.set_stylebox("panel", "TooltipPanel", tip)
+	_ui_theme.set_color("font_color", "TooltipLabel", Palette.TEXT)
+	var track := StyleBoxFlat.new()
+	track.bg_color = Palette.PANEL_BG_ALT
+	track.border_color = Palette.PANEL_LINE
+	track.set_border_width_all(1)
+	track.set_corner_radius_all(4)
+	track.content_margin_left = 2
+	track.content_margin_right = 2
+	track.content_margin_top = 2
+	track.content_margin_bottom = 2
+	var grab := StyleBoxFlat.new()
+	grab.bg_color = Palette.PANEL_BORDER
+	grab.set_corner_radius_all(3)
+	grab.content_margin_left = 2
+	grab.content_margin_right = 2
+	grab.content_margin_top = 2
+	grab.content_margin_bottom = 2
+	var grab_hl: StyleBoxFlat = grab.duplicate() as StyleBoxFlat
+	grab_hl.bg_color = Palette.HEADING
+	var grab_pr: StyleBoxFlat = grab.duplicate() as StyleBoxFlat
+	grab_pr.bg_color = Palette.HEADING
+	var grab_dis: StyleBoxFlat = grab.duplicate() as StyleBoxFlat
+	grab_dis.bg_color = Color(Palette.PANEL_BORDER, 0.5)
+	for bar_name in ["VScrollBar", "HScrollBar"]:
+		_ui_theme.set_stylebox("scroll", StringName(bar_name), track.duplicate() as StyleBoxFlat)
+		_ui_theme.set_stylebox("grabber", StringName(bar_name), grab.duplicate() as StyleBoxFlat)
+		_ui_theme.set_stylebox("grabber_highlight", StringName(bar_name), grab_hl.duplicate() as StyleBoxFlat)
+		_ui_theme.set_stylebox("grabber_pressed", StringName(bar_name), grab_pr.duplicate() as StyleBoxFlat)
+		_ui_theme.set_stylebox("grabber_disabled", StringName(bar_name), grab_dis.duplicate() as StyleBoxFlat)
+	var groove := StyleBoxFlat.new()
+	groove.bg_color = Palette.PANEL_BG_ALT
+	groove.border_color = Palette.PANEL_BORDER
+	groove.set_border_width_all(1)
+	groove.set_corner_radius_all(3)
+	groove.content_margin_left = 2
+	groove.content_margin_right = 2
+	_ui_theme.set_stylebox("slider", "HSlider", groove)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Palette.HEADING
+	fill.set_corner_radius_all(3)
+	var fill_hl: StyleBoxFlat = fill.duplicate() as StyleBoxFlat
+	fill_hl.bg_color = Palette.ACCENT_GOLD
+	_ui_theme.set_stylebox("grabber_area", "HSlider", fill)
+	_ui_theme.set_stylebox("grabber_area_highlight", "HSlider", fill_hl)
+	_ui_theme.set_stylebox("grabber", "HSlider", grab.duplicate() as StyleBoxFlat)
+	_ui_theme.set_stylebox("grabber_highlight", "HSlider", grab_hl.duplicate() as StyleBoxFlat)
+	_ui_theme.set_stylebox("grabber_disabled", "HSlider", grab_dis.duplicate() as StyleBoxFlat)
+	_ui_theme.set_icon("grabber", "HSlider", _make_grabber_tex(Palette.PANEL_BORDER))
+	_ui_theme.set_icon("grabber_highlight", "HSlider", _make_grabber_tex(Palette.HEADING))
+	_ui_theme.set_icon("grabber_disabled", "HSlider", _make_grabber_tex(Color(Palette.PANEL_BORDER, 0.5)))
+	for sep_name in ["VSeparator", "HSeparator"]:
+		var line := StyleBoxLine.new()
+		line.color = Palette.PANEL_BORDER
+		line.thickness = 1
+		line.vertical = sep_name == "VSeparator"
+		_ui_theme.set_stylebox("line", StringName(sep_name), line)
+	_ui_theme.emit_changed()
+	theme = _ui_theme
+
+func _make_grabber_tex(col: Color) -> ImageTexture:
+	var size := 32
+	var img := Image.create(size, size, false, Image.Format.FORMAT_RGBA8)
+	var center := Vector2(16.0, 16.0)
+	for y in range(size):
+		for x in range(size):
+			var px := Vector2(float(x) + 0.5, float(y) + 0.5)
+			var d := px.distance_to(center)
+			if d <= 15.0:
+				img.set_pixel(x, y, col if d < 14.0 else Color(col.r, col.g, col.b, col.a * (15.0 - d)))
+			else:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+	img.resize(16, 16)
+	return ImageTexture.create_from_image(img)
 
 func _style_check(cb: BaseButton) -> void:
 	_build_check_theme()
@@ -7464,6 +7674,7 @@ func _style_check(cb: BaseButton) -> void:
 	cb.add_theme_color_override("font_color", Palette.TEXT)
 	cb.add_theme_color_override("font_hover_color", Palette.OPTION_HOVER_TEXT)
 	cb.add_theme_color_override("font_pressed_color", Palette.OPTION_HOVER_TEXT)
+	cb.add_theme_color_override("font_hover_pressed_color", Palette.OPTION_HOVER_TEXT)
 	cb.add_theme_color_override("font_focus_color", Palette.OPTION_HOVER_TEXT)
 	cb.add_theme_color_override("font_disabled_color", Palette.TEXT_MUTED)
 
@@ -7511,15 +7722,11 @@ func _build_check_theme() -> void:
 				box = focus
 		_check_theme.set_stylebox(StringName(item_name), "CheckBox", box)
 	for icon_name in ["unchecked", "checked", "unchecked_disabled", "checked_disabled"]:
-		if bool(Palette.style_option("custom_check_icons", false)):
-			var checked_icon: bool = icon_name.begins_with("checked")
-			var strength := 0.5 if icon_name.ends_with("_disabled") else 1.0
-			if icon_name == "checked_disabled":
-				strength = 0.45
-			_check_theme.set_icon(StringName(icon_name), "CheckBox", _make_check_icon(checked_icon, strength))
-		else:
-			if _check_theme.has_icon(StringName(icon_name), "CheckBox"):
-				_check_theme.clear_icon(StringName(icon_name), "CheckBox")
+		var checked_icon: bool = icon_name.begins_with("checked")
+		var strength := 0.5 if icon_name.ends_with("_disabled") else 1.0
+		if icon_name == "checked_disabled":
+			strength = 0.45
+		_check_theme.set_icon(StringName(icon_name), "CheckBox", _make_check_icon(checked_icon, strength))
 	_check_theme.emit_changed()
 
 
@@ -7800,13 +8007,17 @@ func _make_compact_card(bg_col: Color) -> PanelContainer:
 	p.add_theme_stylebox_override("panel", st)
 	return p
 
-func _make_card_panel(bg_col: Color) -> PanelContainer:
+func _make_card_panel(bg_col: Color, fine_line: bool = false) -> PanelContainer:
 	var p := PanelContainer.new()
 	var st := _paper_panel_style()
 	st.bg_color = bg_col
 	st.set_corner_radius_all(10)
-	st.set_border_width_all(2)
-	st.border_color = Color(Palette.PANEL_BORDER, 0.85)
+	if fine_line:
+		st.set_border_width_all(1)
+		st.border_color = Palette.PANEL_LINE
+	else:
+		st.set_border_width_all(2)
+		st.border_color = Color(Palette.PANEL_BORDER, 0.85)
 	p.add_theme_stylebox_override("panel", st)
 	return p
 
@@ -8152,6 +8363,7 @@ func _build_review_bar(bar_box: VBoxContainer) -> void:
 	_review_speed_opt.tooltip_text = "Playback speed"
 	_review_speed_opt.select(0)
 	_review_speed_opt.item_selected.connect(func(idx: int) -> void: _review_speed = [1, 2, 4][idx])
+	_style_option(_review_speed_opt)
 	_review_bar.add_child(_review_speed_opt)
 	_review_step_lbl = Label.new()
 	_review_step_lbl.add_theme_font_size_override("font_size", 12)
@@ -8479,14 +8691,14 @@ func _apply_save_buttons() -> void:
 func _build_replays_overlay() -> void:
 	_replays_overlay = ColorRect.new()
 	_replays_overlay.z_index = 2
-	_replays_overlay.color = Color(Palette.INK, 0.62)
+	_replays_overlay.color = Color(Palette.SCRIM, 0.62)
 	_replays_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_replays_overlay.visible = false
 	add_child(_replays_overlay)
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_replays_overlay.add_child(center)
-	var modal := _make_card_panel(Palette.PANEL_BG)
+	var modal := _make_card_panel(Palette.PANEL_BG, true)
 	modal.custom_minimum_size = Vector2(660, 340)
 	center.add_child(modal)
 	var vbox := VBoxContainer.new()
@@ -8612,7 +8824,7 @@ class ReviewSliderTicks extends Control:
 		var w := size.x - inset * 2.0
 		for m in marks:
 			var x := inset + clampf(m, 0.0, 1.0) * w
-			draw_rect(Rect2(x - 0.5, size.y - 8.0, 1.0, 7.0), Color(0.28, 0.22, 0.12, 0.9))
+			draw_rect(Rect2(x - 0.5, size.y - 8.0, 1.0, 7.0), Palette.PANEL_BORDER)
 
 class DiceShowFX extends DicePairWidget:
 	var faces: Array[int] = [1, 1]
@@ -8795,7 +9007,7 @@ class DicePairWidget extends Control:
 		_draw_die(Vector2(0.0, top), bf1)
 		_draw_die(Vector2(DICE_SIZE + DICE_GAP, top), bf2)
 		if not total_visible:
-			draw_rect(Rect2(Vector2(-2.0, top - 2.0), Vector2(DICE_SIZE * 2.0 + DICE_GAP + 4.0, DICE_SIZE + 4.0)), Color(Palette.PAPER, 0.55))
+			draw_rect(Rect2(Vector2(-2.0, top - 2.0), Vector2(DICE_SIZE * 2.0 + DICE_GAP + 4.0, DICE_SIZE + 4.0)), Color(Palette.ART_LIGHT, 0.55))
 
 		var pill_pos := Vector2(DICE_SIZE * 2.0 + DICE_GAP + 8.0, top + (DICE_SIZE - PILL_H) * 0.5)
 		var pill_rect := Rect2(pill_pos, Vector2(PILL_W, PILL_H))
@@ -8849,7 +9061,7 @@ class DicePairWidget extends Control:
 		if _roll_enabled:
 			var ring := StyleBoxFlat.new()
 			ring.bg_color = Color(Palette.PANEL_BG, 0.0)
-			ring.border_color = Color(Palette.HIGHLIGHT, _pulse_alpha)
+			ring.border_color = Color(Palette.DICE_PULSE_RING, _pulse_alpha)
 			ring.set_border_width_all(3)
 			ring.set_corner_radius_all(10)
 			draw_style_box(ring, Rect2(Vector2(-2, -2), size + Vector2(4, 4)))
@@ -8865,7 +9077,7 @@ class DicePairWidget extends Control:
 		var rect := Rect2(origin, Vector2(DICE_SIZE, DICE_SIZE))
 		var box := StyleBoxFlat.new()
 		box.bg_color = Palette.DICE_FACE
-		box.border_color = Palette.INK
+		box.border_color = Palette.PANEL_BORDER
 		box.set_border_width_all(2)
 		box.set_corner_radius_all(7)
 		box.shadow_color = Palette.PAPER_SHADOW

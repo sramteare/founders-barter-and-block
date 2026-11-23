@@ -7,95 +7,143 @@ const UI_SCRIPT_PATH := "res://scripts/main_ui.gd"
 const TEST_SETTINGS_PATH := "user://test_settings.cfg"
 const NO_EVENTS: Array[String] = []
 var _ui_queue: Array[Callable] = []
-var _pending_ui: Node = null
-var _pending_body: Callable = Callable()
 
 func _init() -> void:
 	print("=== Founders: Barter & Block - Headless Test Suite ===")
+	if not _runner_setup():
+		return
 	root.size = Vector2i(1400, 1100)
 	var ui_script = load(UI_SCRIPT_PATH)
 	ui_script.settings_path = TEST_SETTINGS_PATH
 	ui_script.turn_min_seconds_override = 0.0
-	_test_topology()
-	_test_board_generator()
-	_test_setup_and_distance_rule()
-	_test_longest_route_and_splitting()
-	_test_seven_roll_discard_and_blocker()
-	_test_maritime_trade_and_action_cards()
-	_test_open_trade_flow()
-	_test_full_4bot_simulated_match()
-	_test_main_scene_load()
-	_test_road_work_real()
-	_test_full_bot_match_2p_and_3p()
-	_test_victory_hidden_charter()
-	_test_city_upgrade()
-	_test_blocker_steal()
-	_test_discard_validation()
-	_test_trade_response_guards()
-	_test_revisable_trade_responses()
-	_test_revisable_session_and_bots()
-	_test_step_guard_owner_only()
-	_test_difficulty3_stronger()
-	_test_bank_conservation_match()
-	_test_bank_production_rule()
-	_test_bank_maritime_empty()
-	_test_steal_victim_choice()
-	_test_standings()
-	_test_played_dev_core()
-	_test_start_player_rotation()
-	_test_replay_engine()
-	_test_token_number_legibility()
-	_test_palette_styles()
-	_test_palette_restyle_tree()
+	_run_plain(_test_topology)
+	_run_plain(_test_board_generator)
+	_run_plain(_test_setup_and_distance_rule)
+	_run_plain(_test_longest_route_and_splitting)
+	_run_plain(_test_seven_roll_discard_and_blocker)
+	_run_plain(_test_maritime_trade_and_action_cards)
+	_run_plain(_test_open_trade_flow)
+	_run_plain(_test_full_4bot_simulated_match)
+	_run_plain(_test_main_scene_load)
+	_run_plain(_test_road_work_real)
+	_run_plain(_test_full_bot_match_2p_and_3p)
+	_run_plain(_test_victory_hidden_charter)
+	_run_plain(_test_city_upgrade)
+	_run_plain(_test_blocker_steal)
+	_run_plain(_test_discard_validation)
+	_run_plain(_test_trade_response_guards)
+	_run_plain(_test_revisable_trade_responses)
+	_run_plain(_test_revisable_session_and_bots)
+	_run_plain(_test_step_guard_owner_only)
+	_run_plain(_test_difficulty3_stronger)
+	_run_plain(_test_bank_conservation_match)
+	_run_plain(_test_bank_production_rule)
+	_run_plain(_test_bank_maritime_empty)
+	_run_plain(_test_steal_victim_choice)
+	_run_plain(_test_standings)
+	_run_plain(_test_played_dev_core)
+	_run_plain(_test_start_player_rotation)
+	_run_plain(_test_replay_engine)
+	_run_plain(_test_token_number_legibility)
+	_run_plain(_test_palette_styles)
+	_run_plain(_test_palette_restyle_tree)
 	_start_ui_tests()
 
 var _settle_hold: int = 0
+var _ui_tests: Array[Callable] = []
+var _ui_current: Node = null
+var _ui_body_started: bool = false
+var _ui_body_running: bool = false
+var _ui_sections_before: int = 0
 
+# One UI test at a time: build the scene, call the body on the next frame, run the
+# jobs the body queued (one per frame, never during a _ui_settle), and free the
+# scene as soon as the body has returned and its queue is empty.
 func _process(_delta: float) -> bool:
+	if _run_abort:
+		return true
 	if _settle_hold > 0:
 		return false
 	if not _ui_queue.is_empty():
 		var job: Callable = _ui_queue.pop_front()
 		job.call()
-		if _ui_queue.is_empty():
-			_finish_suite()
-			return true
 		return false
-	_finish_suite()
-	return true
+	if _ui_body_running:
+		return false
+	_end_ui_test()
+	if _ui_tests.is_empty():
+		_finish_suite()
+		return true
+	_begin_ui_test(_ui_tests.pop_front())
+	return false
 
-func _queue_ui_test(seats: Array[SeatConfig], body: Callable) -> void:
+func _queue_ui_test(_seats: Array[SeatConfig], body: Callable) -> void:
+	if _runner_wants(body, true):
+		_ui_tests.append(body)
+
+# Tests that never set a window size themselves but only pass at 1280x800, the size
+# the test before them used to leave behind.
+const UI_TEST_WINDOW := {
+	"_test_port_tags_fit_body": Vector2i(1280, 800),
+	"_test_chip_hover_banner_body": Vector2i(1280, 800),
+	"_test_layout_rect_lock_body": Vector2i(1280, 800),
+	"_test_discard_prompt_strip_body": Vector2i(1280, 800),
+}
+
+func _begin_ui_test(body: Callable) -> void:
+	_fps_before_test = Engine.max_fps
+	# Every UI test starts from the same place whatever ran before it: no settings
+	# file and the headless default window, or the window it names below.
+	if FileAccess.file_exists(TEST_SETTINGS_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS_PATH))
+	root.size = UI_TEST_WINDOW.get(String(body.get_method()), Vector2i(1280, 800))
+	var packed := ResourceLoader.load("res://scenes/main.tscn") as PackedScene
+	_assert(packed != null, "main.tscn should load for the UI test")
+	if packed == null:
+		return
+	var ui: Node = packed.instantiate()
+	ui.auto_ai = false
+	root.add_child(ui)
+	_ui_current = ui
 	_ui_queue.append(func() -> void:
-		var packed := ResourceLoader.load("res://scenes/main.tscn") as PackedScene
-		_assert(packed != null, "main.tscn should load for the UI test")
-		if packed == null:
-			return
-		var ui: Node = packed.instantiate()
-		ui.auto_ai = false
-		root.add_child(ui)
-		_pending_ui = ui
-		_pending_body = body
-	)
-	_ui_queue.append(func() -> void:
-		var ui: Node = _pending_ui
-		_pending_ui = null
-		var b: Callable = _pending_body
-		_pending_body = Callable()
-		if ui == null:
-			return
 		if not ui.is_node_ready():
 			_assert(false, "UI should be ready by the first processed frame")
-			_ui_queue.append(func() -> void:
-				ui.free()
-			)
 			return
-		var sections_before: int = _sections_done
-		b.call(ui)
-		_ui_queue.append(func() -> void:
-			_assert(_sections_done > sections_before, "The last UI test body must reach _pass_section (a SCRIPT ERROR may have aborted it)")
-			ui.free()
-		)
+		_ui_sections_before = _sections_done
+		_ui_body_started = true
+		_run_ui_body(body, ui)
 	)
+
+func _run_ui_body(body: Callable, ui: Node) -> void:
+	_ui_body_running = true
+	# Headless inflates every text metric while the OS window is smaller than
+	# the viewport (a 64 px window reports a 14 px font as 42 px), and the
+	# inflation stays cached in every control until a window-resize lands and
+	# minimum sizes are recomputed. The prep gives each UI test its real
+	# window; wait for that resize to land, then recompute the whole tree's
+	# cached minimums so headless tests measure the same text metrics as a
+	# real window.
+	await _ui_settle(3)
+	_style_poke_theme(ui)
+	await _ui_settle(2)
+	await body.call(ui)
+	_ui_body_running = false
+
+func _end_ui_test() -> void:
+	if _ui_body_started:
+		_assert(_sections_done > _ui_sections_before, "The last UI test body must reach _pass_section (a SCRIPT ERROR may have aborted it)")
+	_ui_body_started = false
+	if _ui_current != null and is_instance_valid(_ui_current):
+		_ui_current.free()
+	_ui_current = null
+	Engine.max_fps = _fps_before_test
+
+# Headless frames are not throttled, so a few hundred of them pass in well under a
+# second. A test that watches wall-clock behaviour (pacing timers, flight durations,
+# the 300 ms touch guard) calls this first to get frames as long as the game's own;
+# the runner lifts the cap again when the test ends.
+func _use_real_frame_rate() -> void:
+	Engine.max_fps = 60
 
 func _ui_drive_until(ui: Node, predicate: Callable, max_steps: int = 6000) -> bool:
 	for _step in range(max_steps):
@@ -176,17 +224,22 @@ func _ui_force_bot_offer(ui: Node) -> bool:
 	return not ui.session.state.open_trade.is_empty()
 
 func _finish_suite() -> void:
+	if _run_list:
+		print("Sections listed: %d of %d" % [_run_tests_selected, _run_tests_total])
+		quit(0)
+		return
 	if FileAccess.file_exists(TEST_SETTINGS_PATH):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS_PATH))
 	load(UI_SCRIPT_PATH).settings_path = "user://settings.cfg"
 	load(UI_SCRIPT_PATH).turn_min_seconds_override = -1.0
 	print("======================================================")
+	_runner_print_timing()
 	print("Tests Passed: %d | Tests Failed: %d" % [_passed, _failed])
 	if _failed > 0:
-		print("RESULT: FAILED")
+		print("RESULT: FAILED" + _runner_filter_note())
 		quit(1)
 	else:
-		print("RESULT: ALL TESTS PASSED")
+		print("RESULT: ALL TESTS PASSED" + _runner_filter_note())
 		quit(0)
 
 func _assert(cond: bool, msg: String) -> void:
@@ -200,7 +253,177 @@ var _sections_done: int = 0
 
 func _pass_section(title: String) -> void:
 	_sections_done += 1
-	print("[PASS] " + title)
+	var now_ms := Time.get_ticks_msec()
+	var secs := float(now_ms - _section_mark_ms) / 1000.0
+	_section_mark_ms = now_ms
+	_section_times.append([secs, title])
+	# A UI test's last check (the body reached this line) runs right after it.
+	var checks := _passed + _failed - _section_checks_mark + (1 if _ui_body_started else 0)
+	_section_checks_mark = _passed + _failed + (1 if _ui_body_started else 0)
+	print("[PASS] %s [%.1fs, %d checks]" % [title, secs, checks])
+
+# ---- runner: timing, subset selection, shards ----
+# Arguments go after "--":  godot4 --headless --path . --script tests/run_tests.gd -- <args>
+#   --list            print the section titles the other arguments select, run nothing
+#   --only=95,133     run these section numbers
+#   --match=<text>    run sections whose title contains the text (any case)
+#   --skip-slow       leave out the tests in SLOW_TEST_SECONDS (each is printed)
+#   --shard=K/N       run shard K of N (0-based); tests without a UI all go to shard 0
+# With no arguments the whole suite runs. A run with any of these says so in its
+# RESULT line, so it cannot be mistaken for a full run. tests/run_fast.sh runs the
+# shards in parallel and merges their results.
+var _section_mark_ms: int = 0
+var _section_checks_mark: int = 0
+var _fps_before_test: int = 0
+var _section_times: Array = []
+var _run_tests_total: int = 0
+var _run_tests_selected: int = 0
+var _run_only: Dictionary = {}
+var _run_match: String = ""
+var _run_skip_slow: bool = false
+var _run_list: bool = false
+var _run_shard: int = -1
+var _run_shards: int = 0
+var _run_shard_load: Array[float] = []
+var _run_filtered: bool = false
+var _run_abort: bool = false
+var _run_sections: Dictionary = {}
+
+# Seconds each slower test takes in a full single-process run (measured, rounded up).
+# --skip-slow leaves these out; --shard uses them to balance the shards. Every test
+# not listed counts as 0.2 s.
+const SLOW_TEST_SECONDS := {
+	"_test_layout_rect_lock_body": 4,  # 95
+	"_test_steal_flight_real_body": 4,  # 96
+	"_test_dead_offer_autowithdraw_body": 2,  # 97
+	"_test_fresh_trade_after_no_takers_body": 2,  # 99
+	"_test_clear_button_states_body": 2,  # 100
+	"_test_live_trade_pacing_body": 6,  # 104
+	"_test_fps_cap_body": 4,  # 110
+	"_test_review_mode_body": 5,  # 113
+	"_test_saved_replays_body": 7,  # 114
+	"_test_rev_anim_timing_body": 2,  # 123
+	"_test_count_badge_remove_body": 3,  # 126
+	"_test_style_layout_lock_body": 10,  # 132
+	"_test_style_leftover_scan_body": 11,  # leftover scan (no number)
+	"_test_style_contrast_body": 9,  # 133
+}
+
+func _runner_setup() -> bool:
+	_section_mark_ms = Time.get_ticks_msec()
+	print("user data dir: " + OS.get_user_data_dir())
+	_runner_scan_sections()
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--only="):
+			for part in arg.trim_prefix("--only=").split(",", false):
+				_run_only[int(part)] = true
+		elif arg.begins_with("--match="):
+			_run_match = arg.trim_prefix("--match=").to_lower()
+		elif arg == "--skip-slow":
+			_run_skip_slow = true
+		elif arg == "--list":
+			_run_list = true
+		elif arg.begins_with("--shard="):
+			var bits := arg.trim_prefix("--shard=").split("/")
+			if bits.size() != 2 or int(bits[1]) < 1 or int(bits[0]) < 0 or int(bits[0]) >= int(bits[1]):
+				printerr("[FAIL] bad --shard value (want K/N with 0 <= K < N): " + arg)
+				_run_abort = true
+				quit(2)
+				return false
+			_run_shard = int(bits[0])
+			_run_shards = int(bits[1])
+			_run_shard_load.resize(_run_shards)
+			_run_shard_load.fill(0.0)
+		else:
+			printerr("[FAIL] unknown argument: " + arg)
+			_run_abort = true
+			quit(2)
+			return false
+	_run_filtered = not _run_only.is_empty() or _run_match != "" or _run_skip_slow or _run_shards > 0
+	for wanted in _run_only:
+		var known := false
+		for method in _run_sections:
+			if (_run_sections[method]["numbers"] as Array).has(wanted):
+				known = true
+		if not known:
+			printerr("[FAIL] --only names section %d, which does not exist" % int(wanted))
+			_run_abort = true
+			quit(2)
+			return false
+	return true
+
+func _runner_scan_sections() -> void:
+	var text := FileAccess.get_file_as_string((get_script() as Script).resource_path)
+	var current := ""
+	var func_rx := RegEx.create_from_string("^func (\\w+)\\(")
+	var pass_rx := RegEx.create_from_string("^\\t+_pass_section\\(\"((?:(\\d+)\\. )?[^\"]*)\"")
+	for line in text.split("\n"):
+		var fm := func_rx.search(line)
+		if fm != null:
+			current = fm.get_string(1)
+			continue
+		var pm := pass_rx.search(line)
+		if pm != null:
+			if not _run_sections.has(current):
+				_run_sections[current] = {"numbers": [], "title": pm.get_string(1)}
+			var nums: Array = _run_sections[current]["numbers"]
+			if pm.get_string(2) != "" and not nums.has(int(pm.get_string(2))):
+				nums.append(int(pm.get_string(2)))
+
+func _runner_wants(test: Callable, is_ui: bool) -> bool:
+	var method := String(test.get_method())
+	var info: Dictionary = _run_sections.get(method, {"numbers": [], "title": "(no pass line) " + method})
+	var numbers: Array = info["numbers"]
+	var title := String(info["title"])
+	_run_tests_total += 1
+	var is_slow := SLOW_TEST_SECONDS.has(method)
+	var weight := float(SLOW_TEST_SECONDS.get(method, 0.2))
+	var shard := 0
+	if _run_shards > 0 and is_ui:
+		for k in range(_run_shards):
+			if _run_shard_load[k] < _run_shard_load[shard]:
+				shard = k
+	if _run_shards > 0:
+		_run_shard_load[shard] += weight
+	var wanted := true
+	if not _run_only.is_empty():
+		wanted = false
+		for n in numbers:
+			if _run_only.has(n):
+				wanted = true
+	if _run_match != "" and not title.to_lower().contains(_run_match):
+		wanted = false
+	if _run_shards > 0 and shard != _run_shard:
+		wanted = false
+	if wanted and _run_skip_slow and is_slow:
+		print("[SKIP-SLOW] %s (about %d s)" % [title, int(weight)])
+		wanted = false
+	if _run_list:
+		if wanted:
+			_run_tests_selected += 1
+			print("[LIST] " + title)
+		return false
+	if wanted:
+		_run_tests_selected += 1
+	return wanted
+
+func _run_plain(test: Callable) -> void:
+	if _runner_wants(test, false):
+		test.call()
+
+func _runner_filter_note() -> String:
+	if not _run_filtered:
+		return ""
+	return " (filtered: %d of %d sections)" % [_run_tests_selected, _run_tests_total]
+
+func _runner_print_timing() -> void:
+	var total := float(Time.get_ticks_msec()) / 1000.0
+	var order := _section_times.duplicate()
+	order.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) > float(b[0]))
+	print("Slowest sections:")
+	for i in range(mini(10, order.size())):
+		print("  [SLOW] %7.1f s  %s" % [float(order[i][0]), String(order[i][1])])
+	print("Sections run: %d of %d | Total time: %.1f s" % [_run_tests_selected, _run_tests_total, total])
 
 func _test_topology() -> void:
 	var topo := HexMath.get_topology()
@@ -1202,6 +1425,46 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
 	], _test_award_glyph_highlight_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_log_stays_placed_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_badge_over_art_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_fine_line_chrome_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_island_top_bar_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_audit_contrast_batch_a_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_art_batch_b_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_controls_batch_c_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -4690,6 +4953,10 @@ func _find_swatch_of(node: Node, col: Color) -> bool:
 	for c in node.get_children():
 		if c is ColorRect and _color_close((c as ColorRect).color, col):
 			return true
+		if c is Panel:
+			var sb := (c as Control).get_theme_stylebox("panel")
+			if sb is StyleBoxFlat and _color_close((sb as StyleBoxFlat).bg_color, col):
+				return true
 		if _find_swatch_of(c, col):
 			return true
 	return false
@@ -5635,6 +5902,7 @@ func _flyer_kinds(ui: Node) -> Array[String]:
 	return out
 
 func _test_action_flights_body(ui: Node) -> void:
+	_use_real_frame_rate()
 	var seats: Array[SeatConfig] = [
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
@@ -6608,6 +6876,7 @@ func _watch_row_status(col: Control) -> Dictionary:
 	return out
 
 func _test_live_trade_pacing_body(ui: Node) -> void:
+	_use_real_frame_rate()
 	var seats: Array[SeatConfig] = [
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
@@ -6636,6 +6905,13 @@ func _test_live_trade_pacing_body(ui: Node) -> void:
 	st = s.state
 	_assert(not st.open_trade.is_empty(), "Dune's offer is open")
 	await _ui_settle(2)
+	# The lead-up trades leave their "No deal" / "Trade made" result up for 1 to 1.5 s
+	# of real time, and the bots hold their answers until it is gone. Let it run out
+	# here, or the watch below sees that old result end and stops before any answer.
+	var stale_guard := 0
+	while bool(ui._ot_result_active) and Time.get_ticks_msec() < int(ui._ot_result_until_ms) and stale_guard < 600:
+		stale_guard += 1
+		await _ui_settle(1)
 	# New rule: the bots answer first; the human answers when the wave reaches
 	# them, still inside the observed window, so every answer is a visible step.
 	ui.auto_ai = true
@@ -6921,6 +7197,8 @@ func _sidebar_fit_check(ui: Node, tag: String) -> void:
 			continue
 		for k in cand.get_children():
 			if k == ui._sidebar_box:
+				sc = cand
+			elif k is Control and (k as Control).is_ancestor_of(ui._sidebar_box):
 				sc = cand
 	_assert(sc != null, "%s: the sidebar scroll container is found" % tag)
 	if sc == null:
@@ -8707,6 +8985,7 @@ func _p31_editor_chain(ui: Node, tag: String) -> void:
 	_assert(int(ui._trade_get_counts.get(GRAIN, 0)) == 0, "%s: a touch press on the badge removes one" % tag)
 
 func _test_count_badge_remove_body(ui: Node) -> void:
+	_use_real_frame_rate()
 	root.size = Vector2i(1280, 800)
 	await _ui_settle(2)
 	var seats: Array[SeatConfig] = [
@@ -8847,15 +9126,15 @@ func _test_palette_styles() -> void:
 	for icon_id in Palette.STYLE_IDS:
 		_assert((Palette.STYLE_OPTIONS[icon_id] as Dictionary).has("icon"), "STYLE_OPTIONS gives the %s style a switcher icon" % icon_id)
 	_assert(String(Palette.style_option("icon", "sun")) == "sun", "paper names the sun icon")
-	_assert(Palette.style_option("custom_check_icons", true) == false, "style_option reads the paper style")
+	_assert(Palette.style_option("custom_check_icons", false) == true, "style_option reads the paper style")
 	_assert(Palette.style_option("unknown_option_name", "fb") == "fb", "style_option falls back for an unknown name")
 	Palette.apply_style("dark")
 	_assert(Palette.style_option("custom_check_icons", false) == true, "style_option reads the dark style")
 	_assert(float(Palette.style_option("toast_text_min_contrast", 0.0)) == 4.5, "dark asks for 4.5:1 toast text")
 	_assert(String(Palette.style_option("icon", "sun")) == "moon", "dark names the moon icon")
 	Palette.apply_style("paper")
-	_assert(float(Palette.style_option("toast_text_min_contrast", 0.0)) == 0.0, "paper leaves toast text untouched")
-	_assert(paper.size() == 99, "the paper style covers every colour variable (%d keys)" % paper.size())
+	_assert(float(Palette.style_option("toast_text_min_contrast", 0.0)) == 4.5, "paper asks for 4.5:1 toast text too")
+	_assert(paper.size() == 112, "the paper style covers every colour variable (%d keys)" % paper.size())
 	_assert(paper_keys == dark_keys, "the paper and dark styles cover exactly the same keys")
 	var originals := {
 		"TEXT": Color(0.29, 0.22, 0.17),
@@ -9082,9 +9361,9 @@ func _traceable_style_checks(script: GDScript, colour_keys: Array) -> void:
 		"ACCENT_RED": Color(0.80, 0.37, 0.31),
 		"ACCENT_GREEN": Color(0.42, 0.66, 0.40),
 		"BUTTON_BG": Color(0.90, 0.83, 0.68),
-		"BUTTON_BG_HOVER": Color(0.94, 0.88, 0.74),
+		"BUTTON_BG_HOVER": Color(0.86, 0.78, 0.60),
 		"BUTTON_BG_PRESSED": Color(0.83, 0.75, 0.60),
-		"BUTTON_BG_DISABLED": Color(0.84, 0.81, 0.74),
+		"BUTTON_BG_DISABLED": Color(0.9400, 0.9050, 0.8150),
 		"BUTTON_TEXT": Color(0.29, 0.22, 0.17),
 		"TOAST_BG": Color(0.20, 0.42, 0.40, 0.92),
 		"TOAST_TEXT": Color(0.97, 0.93, 0.83),
@@ -9092,7 +9371,7 @@ func _traceable_style_checks(script: GDScript, colour_keys: Array) -> void:
 		"HIGHLIGHT_INVALID": Color(0.80, 0.37, 0.31, 0.55),
 		"NUMBER_TOKEN_BG": Color(0.96, 0.92, 0.82),
 		"NUMBER_TOKEN_TEXT": Color(0.29, 0.22, 0.17),
-		"NUMBER_TOKEN_HOT": Color(0.80, 0.37, 0.31),
+		"NUMBER_TOKEN_HOT": Color(0.6200, 0.1500, 0.1000),
 		"BLOCKER": Color(0.32, 0.27, 0.23),
 		"DOCK_WOOD": Color(0.60, 0.45, 0.30),
 		"DICE_FACE": Color(0.97, 0.94, 0.86),
@@ -9134,7 +9413,7 @@ func _traceable_style_checks(script: GDScript, colour_keys: Array) -> void:
 		"RES_IRON": Color(0.55, 0.60, 0.66),
 		"PANEL_BG": Color(0.15, 0.16, 0.19),
 		"PANEL_BG_ALT": Color(0.19, 0.20, 0.24),
-		"PANEL_BORDER": Color(0.42, 0.44, 0.52),
+		"PANEL_BORDER": Color(0.4700, 0.4900, 0.5700),
 		"TEXT": Color(0.90, 0.89, 0.85),
 		"TEXT_MUTED": Color(0.66, 0.66, 0.67),
 		"TEXT_ON_DARK": Color(0.95, 0.93, 0.86),
@@ -9153,7 +9432,7 @@ func _traceable_style_checks(script: GDScript, colour_keys: Array) -> void:
 		"HIGHLIGHT_INVALID": Color(0.80, 0.37, 0.31, 0.55),
 		"NUMBER_TOKEN_BG": Color(0.86, 0.82, 0.72),
 		"NUMBER_TOKEN_TEXT": Color(0.16, 0.12, 0.10),
-		"NUMBER_TOKEN_HOT": Color(0.72, 0.22, 0.16),
+		"NUMBER_TOKEN_HOT": Color(0.5500, 0.1200, 0.0900),
 		"BLOCKER": Color(0.32, 0.27, 0.23),
 		"DOCK_WOOD": Color(0.48, 0.36, 0.24),
 		"DICE_FACE": Color(0.90, 0.87, 0.80),
@@ -9452,7 +9731,7 @@ func _test_style_switcher_button_body(ui: Node) -> void:
 	var dark: Dictionary = Palette.STYLES["dark"]
 	_assert(ui._style_btn != null, "the title bar carries a colour style switcher")
 	_assert(String(ui._style_btn.text) == "", "the switcher shows no text, got %s" % str(ui._style_btn.text))
-	_assert(Vector2(ui._style_btn.custom_minimum_size) == Vector2(44, 40), "the switcher keeps a fixed 44x40 box")
+	_assert(Vector2(ui._style_btn.custom_minimum_size) == Vector2(44, 34), "the switcher keeps a fixed 44x34 box (p36 pill height 40 with 3 px above and below)")
 	var icon_paper: Texture2D = ui._style_btn.icon
 	_assert(icon_paper != null, "the paper switcher carries an icon")
 	_assert(String(ui._style_btn.tooltip_text) == "Switch to Dark style", "the tooltip announces the next style, got %s" % str(ui._style_btn.tooltip_text))
@@ -9471,7 +9750,7 @@ func _test_style_switcher_button_body(ui: Node) -> void:
 	_assert(icon_dark != null, "the dark switcher carries an icon")
 	_assert(icon_dark != tex_paper, "the icon texture object changes with the style")
 	_assert(ui._style_btn.get_global_rect() == rect_paper, "the switcher rect is identical in both styles")
-	_assert(Vector2(ui._style_btn.size) == Vector2(44, 40), "the switcher is exactly 44x40 in dark, got %s" % str(ui._style_btn.size))
+	_assert(Vector2(ui._style_btn.size) == Vector2(44, 34), "the switcher is exactly 44x34 in dark, got %s" % str(ui._style_btn.size))
 	_ui_real_click(ui._style_btn)
 	await _ui_settle(3)
 	_assert(Palette.current_style == "paper", "a second real click switches back to paper")
@@ -9480,13 +9759,14 @@ func _test_style_switcher_button_body(ui: Node) -> void:
 	_assert(ui._style_btn.get_global_rect() == rect_paper, "the switcher rect never moved")
 	var img: Image = (ui._style_btn.icon as Texture2D).get_image()
 	var paper_text: Color = paper["BUTTON_TEXT"]
-	var found := false
+	var white := true
 	for py in range(img.get_height()):
 		for px in range(img.get_width()):
 			var col := img.get_pixel(px, py)
-			if col.a > 0.9 and absf(col.r - paper_text.r) < 0.02 and absf(col.g - paper_text.g) < 0.02 and absf(col.b - paper_text.b) < 0.02:
-				found = true
-	_assert(found, "the icon is drawn in the current BUTTON_TEXT colour")
+			if col.a > 0.9 and (absf(col.r - 1.0) > 0.01 or absf(col.g - 1.0) > 0.01 or absf(col.b - 1.0) > 0.01):
+				white = false
+	_assert(white, "the icon texture stays white for the engine to tint")
+	_assert(ui._style_btn.get_theme_color("icon_normal_color") == paper_text, "the icon takes the current BUTTON_TEXT colour")
 	Palette.apply_style("paper")
 	_assert(Palette.current_style == "paper", "reached the end of the switcher test on paper")
 	_pass_section("131. Title Bar Style Toggle Test (one real click per style, sun/moon icon, fixed 44x40 rect)")
@@ -9962,14 +10242,8 @@ func _test_style_leftover_scan_body(ui: Node) -> void:
 		"the leftover scan test leaves the settings file on paper"
 	)
 	_assert(Palette.current_style == "paper", "reached the end of the leftover scan test on paper")
+	_pass_section("Style Leftover Scan Test (no colour of the other style left behind, nine states, live dark equals a fresh dark UI)")
 
-
-const PAPER_CONTRAST_ALLOW := {
-	":: root/VBoxContainer[*]/HBoxContainer[*]/PanelContainer[*]/ScrollContainer[*]/VBoxContainer[*]/VBoxContainer[*]/Control[*]/PanelContainer[*]/HBoxContainer[*]/Control[*]/Label[*]": "VP badge drawn on the player-colour seat chip, today's paper pixels",
-	":: root/Control[*]/VBoxContainer[*]/PanelContainer[*]/Label[*]": "toast tint text on the paper pill, today's paper pixels",
-}
-
-var _contrast_end_turn: Control = null
 
 
 func _style_is_player_colour(c: Color) -> bool:
@@ -10053,12 +10327,6 @@ func _style_contrast_check(c: Control, path: String, tag: String, paper_mode: bo
 		return
 	var generic := RegEx.create_from_string("\\[\\d+\\]").sub(path, "[*]", true)
 	var key := "%s :: %s" % [tag, generic]
-	if paper_mode:
-		if _contrast_end_turn != null and c == _contrast_end_turn:
-			return
-		for allowed in PAPER_CONTRAST_ALLOW:
-			if key.ends_with(String(allowed)):
-				return
 	problems.append("%s :: %s text %s on %s = %.2f (min %.1f)" % [key, txt, str(col), str(bg), r, min_ratio])
 
 
@@ -10079,7 +10347,6 @@ func _style_contrast_walk_node(node: Node, path: String, tag: String, paper_mode
 
 
 func _style_contrast_scan(ui: Node, tag: String, paper_mode: bool) -> void:
-	_contrast_end_turn = ui._end_turn_btn as Control
 	var problems: Array[String] = []
 	_style_contrast_walk_node(ui, "root", tag, paper_mode, problems)
 	var style := "paper" if paper_mode else "dark"
@@ -10154,3 +10421,1010 @@ func _test_award_glyph_highlight_body(ui: Node) -> void:
 	_assert(mins["paper"] == mins["dark"], "the highlighted glyphs ask for the same space in both styles")
 	_assert(Palette.current_style == "paper", "reached the end of the award glyph highlight test on paper")
 	_pass_section("135. Award Glyph Highlight Test (gold box filled from the palette, count in TEXT, 7:1)")
+
+func _p33_log_heading(ui: Node) -> Label:
+	for c in ui._sidebar_box.get_children():
+		if c is HBoxContainer:
+			for gc in c.get_children():
+				if gc is Label and str(gc.text).contains("EVENT LOG"):
+					return gc as Label
+	return null
+
+func _p33_check_pinned(ui: Node, tag: String, h0: Rect2, l0: Rect2, sy0: float, bar0: float, strip0: float, board0: Rect2) -> void:
+	var h1 := _p33_log_heading(ui)
+	_assert(h1 != null, "%s: the EVENT LOG heading is in the sidebar" % tag)
+	if h1 == null:
+		return
+	_assert(h1.get_global_rect() == h0, "%s: the EVENT LOG heading did not move (%s vs %s)" % [tag, str(h1.get_global_rect()), str(h0)])
+	_assert(ui._log_panel.get_global_rect() == l0, "%s: the log panel did not move (%s vs %s)" % [tag, str(ui._log_panel.get_global_rect()), str(l0)])
+	_assert(absf(ui._trade_slot.size.y - sy0) < 0.01, "%s: the trade slot kept its height (%.1f vs %.1f)" % [tag, ui._trade_slot.size.y, sy0])
+	_assert(absf(ui._header_panel.size.y - bar0) < 0.01, "%s: the title bar kept its height (%.1f vs %.1f)" % [tag, ui._header_panel.size.y, bar0])
+	_assert(absf(ui._offer_strip.size.y - strip0) < 0.01, "%s: the offer strip kept its height (%.1f vs %.1f)" % [tag, ui._offer_strip.size.y, strip0])
+	_assert(ui._board_view.get_global_rect() == board0, "%s: the board rect did not change (%s vs %s)" % [tag, str(ui._board_view.get_global_rect()), str(board0)])
+
+func _p33_watch_frames(ui: Node, tag: String, l0: Rect2) -> void:
+	for i in range(40):
+		await _ui_settle(1)
+		_assert(ui._log_panel.get_global_rect() == l0, "%s: frame %d kept the log in place" % [tag, i])
+
+func _test_log_stays_placed_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	await _ui_settle(2)
+	ui.auto_ai = false
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	]
+	ui.session.start_match(31607, seats, true, 0)
+	var s = ui.session
+	var reached := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return not s.is_ai_to_act() and st.phase == GameTypes.TurnPhase.TURN_MAIN and st.open_trade.is_empty()
+	)
+	_assert(reached, "Human main phase is reachable for the log placement test")
+	if not reached:
+		root.size = Vector2i(64, 64)
+		return
+	var st: GameState = s.state
+	var TIMBER: int = GameTypes.ResourceType.TIMBER
+	var CLAY: int = GameTypes.ResourceType.CLAY
+	var IRON: int = GameTypes.ResourceType.IRON
+	var GRAIN: int = GameTypes.ResourceType.GRAIN
+	ui._close_trade_tray_by_user()
+	await _ui_settle(6)
+	var heading := _p33_log_heading(ui)
+	_assert(heading != null, "The sidebar carries an EVENT LOG heading")
+	if heading == null:
+		root.size = Vector2i(64, 64)
+		return
+	var h0: Rect2 = heading.get_global_rect()
+	var l0: Rect2 = ui._log_panel.get_global_rect()
+	var sy0: float = ui._trade_slot.size.y
+	var bar0: float = ui._header_panel.size.y
+	var strip0: float = ui._offer_strip.size.y
+	var board0: Rect2 = ui._board_view.get_global_rect()
+	_assert(absf(bar0 - 52.0) < 0.01, "The title bar is 52 px at 1280x800, got %.1f" % bar0)
+	_assert(absf(strip0 - 30.0) < 0.01, "The offer strip is 30 px at 1280x800, got %.1f" % strip0)
+	_assert(l0.size.y >= 90.0, "The log keeps room for 4 full rows at 1280x800, got %.1f" % l0.size.y)
+	_assert(ui._trade_slot.visible and ui._log_panel.visible, "The slot and the log are on screen before any trade")
+	await _p33_check_pinned(ui, "idle", h0, l0, sy0, bar0, strip0, board0)
+	# Own draft with two give kinds, by real clicks on two hand cards.
+	for r in GameTypes.ALL_RESOURCES:
+		st.players[0]["hand"][r] = 4
+	ui._reset_trade_counts()
+	ui._set_tray_panel_visible(true)
+	await _ui_settle(3)
+	_ui_real_click(ui._res_card_refs[TIMBER])
+	await _ui_settle(2)
+	_ui_real_click(ui._res_card_refs[CLAY])
+	await _ui_settle(2)
+	_assert(int(ui._trade_give_counts.get(TIMBER, 0)) == 1 and int(ui._trade_give_counts.get(CLAY, 0)) == 1, "The draft holds two give kinds")
+	await _p33_check_pinned(ui, "own draft (2 give kinds)", h0, l0, sy0, bar0, strip0, board0)
+	# Post the offer; Dune declines, Pike counters with three resources,
+	# Riven is still waiting.
+	ui._trade_get_counts[GRAIN] = 1
+	ui._refresh_ui()
+	await _ui_settle(2)
+	_ui_real_click(ui._ot_send_btn)
+	await _ui_settle(6)
+	for r in GameTypes.ALL_RESOURCES:
+		st.players[2]["hand"][r] = 4
+	s.submit_action(1, GameAction.respond_open_trade("decline"))
+	s.submit_action(2, GameAction.respond_open_trade("counter", {GRAIN: 2}, {TIMBER: 3, CLAY: 1, IRON: 1}))
+	ui._refresh_ui()
+	await _ui_settle(8)
+	_assert(bool(ui._ot_accept_btn.visible), "The proposer sees the counter with Accept/Decline")
+	await _p33_check_pinned(ui, "own offer: decline + 3-resource counter + waiting", h0, l0, sy0, bar0, strip0, board0)
+	_ui_real_click(ui._ot_accept_btn)
+	await _ui_settle(8)
+	var modal_guard := 0
+	while bool(ui._ot_result_active) and modal_guard < 100:
+		modal_guard += 1
+		await _ui_settle(4)
+	await _ui_settle(4)
+	# Dune makes an offer; both bots answer first and the human is last.
+	st.current_player = 1
+	st.open_trades_this_turn = 0
+	st.players[1]["hand"][GRAIN] = 3
+	s.submit_action(1, GameAction.open_trade({GRAIN: 1}, {TIMBER: 1}))
+	s.submit_action(2, GameAction.respond_open_trade("decline"))
+	s.submit_action(3, GameAction.respond_open_trade("decline"))
+	ui._set_tray_panel_visible(true)
+	ui._refresh_ui()
+	await _ui_settle(8)
+	_assert(bool(ui._trade_respond_mode) and bool(ui._ot_decline_btn.visible), "The human is in the response view")
+	await _p33_check_pinned(ui, "bot offer awaiting human", h0, l0, sy0, bar0, strip0, board0)
+	# Counter editor (real click), watched for single-frame log jumps.
+	_ui_real_click(ui._ot_counter_btn)
+	await _ui_settle(2)
+	_assert(bool(ui._trade_counter_mode), "Counter mode engages")
+	await _p33_watch_frames(ui, "open counter editor", l0)
+	await _ui_settle(4)
+	_assert(bool(ui._ot_back_btn.visible), "The counter editor is open")
+	await _p33_check_pinned(ui, "counter editor", h0, l0, sy0, bar0, strip0, board0)
+	_ui_real_click(ui._ot_back_btn)
+	await _ui_settle(3)
+	_ui_real_click(ui._ot_decline_btn)
+	await _ui_settle(8)
+	await _p33_check_pinned(ui, "after the human declined", h0, l0, sy0, bar0, strip0, board0)
+	st.current_player = 1
+	s.submit_action(1, GameAction.cancel_open_trade())
+	var gone := await _ui_wait_dead_offer_withdrawn(ui, 2000)
+	_assert(gone, "The dead Dune offer is withdrawn before Pike's turn")
+	while bool(ui._ot_result_active):
+		await _ui_settle(4)
+	# A bot-to-bot trade the human only watches: the human declines first
+	# and the offer stays open while the bots deliberate.
+	st.current_player = 2
+	st.open_trades_this_turn = 0
+	st.players[2]["hand"][GRAIN] = 3
+	s.submit_action(2, GameAction.open_trade({GRAIN: 1}, {CLAY: 1}))
+	s.submit_action(0, GameAction.respond_open_trade("decline"))
+	ui._set_tray_panel_visible(true)
+	ui._refresh_ui()
+	await _ui_settle(8)
+	_assert((st.open_trade.get("responses", {}) as Dictionary).has(0), "The human's decline is registered")
+	_assert(not st.open_trade.is_empty(), "The offer stays open while the bots deliberate")
+	_assert(bool(ui._trade_watch_col.visible), "The watch column is visible while bots finish")
+	await _p33_check_pinned(ui, "watching a bot-to-bot trade", h0, l0, sy0, bar0, strip0, board0)
+	s.submit_action(1, GameAction.respond_open_trade("decline"))
+	s.submit_action(3, GameAction.respond_open_trade("decline"))
+	st.current_player = 2
+	s.submit_action(2, GameAction.cancel_open_trade())
+	var gone2 := await _ui_wait_dead_offer_withdrawn(ui, 2000)
+	_assert(gone2, "The dead Pike offer is withdrawn")
+	while bool(ui._ot_result_active):
+		await _ui_settle(4)
+	# Tray closed with the x button.
+	_ui_real_click(ui._res_card_refs[TIMBER])
+	await _ui_settle(2)
+	_assert(bool(ui._trade_close_btn.visible), "The editor shows the close button")
+	_ui_real_click(ui._trade_close_btn)
+	await _ui_settle(6)
+	await _p33_check_pinned(ui, "tray closed", h0, l0, sy0, bar0, strip0, board0)
+	# Same placement in the dark style and back on paper.
+	ui.set_ui_style("dark")
+	await _p33_watch_frames(ui, "style switch to dark", l0)
+	await _ui_settle(4)
+	await _p33_check_pinned(ui, "dark style (tray closed)", h0, l0, sy0, bar0, strip0, board0)
+	ui._set_tray_panel_visible(true)
+	await _ui_settle(3)
+	await _p33_check_pinned(ui, "dark style (editor open)", h0, l0, sy0, bar0, strip0, board0)
+	ui._close_trade_tray_by_user()
+	ui.set_ui_style("paper")
+	await _ui_settle(4)
+	await _p33_check_pinned(ui, "paper again", h0, l0, sy0, bar0, strip0, board0)
+	_assert(Palette.current_style == "paper", "The log placement test ends on paper")
+	root.size = Vector2i(64, 64)
+	_pass_section("136. Event Log Stays Placed (one slot height per window size, 7 trade states, 40-frame watch, both styles)")
+
+func _test_badge_over_art_body(ui: Node) -> void:
+	var TIMBER: int = GameTypes.ResourceType.TIMBER
+	var CLAY: int = GameTypes.ResourceType.CLAY
+	var sizes: Array[Vector2] = [
+		Vector2(30, 42), Vector2(34, 47), Vector2(44, 61.6),
+		Vector2(62, 86.8), Vector2(36, 84.4), Vector2(42, 92.8),
+	]
+	for nm in [false, true]:
+		for pile in [-1, 3]:
+			for sz in sizes:
+				var a := CardFace.new()
+				a.size = sz
+				a.kind = "resource"
+				a.resource = GameTypes.ResourceType.GRAIN
+				a.show_name = nm
+				a.count_badge = true
+				a.pile_count = pile
+				var b := CardFace.new()
+				b.size = sz
+				b.kind = "resource"
+				b.resource = GameTypes.ResourceType.GRAIN
+				b.show_name = nm
+				b.count_badge = true
+				b.pile_count = pile
+				b.count = 5
+				var fa: Rect2 = a._card_rect()
+				var fb: Rect2 = b._card_rect()
+				_assert(fa == fb, "A card that can wear a badge keeps one face rect at %s with count 0 or 5: %s vs %s" % [str(sz), str(fa), str(fb)])
+				var e0: Rect2 = a.emblem_bounds()
+				var e5: Rect2 = b.emblem_bounds()
+				_assert(e0 == e5, "Art at %s (name=%s) keeps one rect with and without a count: %s vs %s" % [str(sz), str(nm), str(e0), str(e5)])
+				_assert(e0.size.x > 4.0 and e0.size.y > 4.0, "Art at %s stays a real area" % str(sz))
+				_assert(fa.grow(-2.0).encloses(e0), "Art at %s lies inside the face rect that is drawn, got %s vs %s" % [str(sz), str(e0), str(fa)])
+				_assert(e0.position.y - fa.position.y >= 3.0, "Art at %s keeps at least 3px to the face top, got %.1f (%s in %s)" % [str(sz), e0.position.y - fa.position.y, str(e0), str(fa)])
+				var badge: Rect2 = b.count_badge_rect()
+				_assert(badge.size.x <= sz.x * 0.4 + 0.01, "Badge stays at most 40%% of the %s card" % str(sz))
+				_assert(Rect2(Vector2.ZERO, sz).encloses(badge), "Badge at %s is never clipped by the card's own rect, got %s" % [str(sz), str(badge)])
+				var over := badge.size.x / 3.0
+				var quarter := Rect2(Vector2(sz.x * 0.5 - over, -over), Vector2(sz.x * 0.5 + over, sz.y * 0.5 + over))
+				_assert(quarter.encloses(badge), "Badge at %s rides the top-right corner, got %s" % [str(sz), str(badge)])
+				a.free()
+				b.free()
+	for sz in [Vector2(30, 42), Vector2(34, 47), Vector2(36, 84.4), Vector2(44, 61.6)]:
+		var c := CardFace.new()
+		c.size = sz
+		c.kind = "resource"
+		c.resource = GameTypes.ResourceType.CLAY
+		c.count_badge = true
+		c.count_clickable = true
+		c.count = 3
+		_assert(c.count_hit_rect().encloses(c.count_badge_rect()), "The drawn badge at %s sits inside its clickable hit rect, got %s vs %s" % [str(sz), str(c.count_badge_rect()), str(c.count_hit_rect())])
+		c.free()
+	var st = ui.session.state
+	st.players[0]["hand"][TIMBER] = 0
+	st.players[0]["hand"][CLAY] = 3
+	ui._refresh_ui()
+	await _ui_settle(2)
+	var zero_card: CardFace = ui._res_card_refs[TIMBER] as CardFace
+	var three_card: CardFace = ui._res_card_refs[CLAY] as CardFace
+	var fz: Rect2 = zero_card._card_rect()
+	var ft: Rect2 = three_card._card_rect()
+	_assert(fz.position.y == ft.position.y and fz.size.y == ft.size.y, "In the live hand row the x0 and x3 cards share one frame top and height, got %s vs %s" % [str(fz), str(ft)])
+	_assert(zero_card.emblem_bounds() == three_card.emblem_bounds(), "In the live hand row the x0 and x3 cards draw art at one rect, got %s vs %s" % [str(zero_card.emblem_bounds()), str(three_card.emblem_bounds())])
+	var bank_fleece: CardFace = ui._bank_faces[GameTypes.ResourceType.FLEECE] as CardFace
+	var bank_f: Rect2 = bank_fleece._card_rect()
+	_assert(not bool(bank_fleece.count_badge) and bank_f.position.y < 5.0, "A badgeless bank card keeps its full-height frame, got %s" % str(bank_f))
+	_pass_section("137. Count Badge Over Art Test (frame and art one rect for count 0 and 5, badge rides the top-right corner)")
+
+func _p34_lum_ch(v: float) -> float:
+	return v / 12.92 if v <= 0.04045 else pow((v + 0.055) / 1.055, 2.4)
+
+func _p34_lum(c: Color) -> float:
+	return 0.2126 * _p34_lum_ch(c.r) + 0.7152 * _p34_lum_ch(c.g) + 0.0722 * _p34_lum_ch(c.b)
+
+func _p34_box(c: Control) -> StyleBoxFlat:
+	return c.get_theme_stylebox("panel") as StyleBoxFlat
+
+func _p34_border_all(st: StyleBoxFlat) -> bool:
+	return st.border_width_left == 1 and st.border_width_right == 1 and st.border_width_top == 1 and st.border_width_bottom == 1
+
+func _p34_any_modal_box(overlay: Node) -> StyleBoxFlat:
+	for c in overlay.find_children("*", "PanelContainer", true, false):
+		var st := _p34_box(c as Control)
+		if st != null and st.border_width_left >= 1 and st.bg_color.a >= 0.9:
+			return st
+	return null
+
+func _p34r_overlay_check(panel: Control, tag: String, name: String) -> void:
+	# Nothing visible may be painted over a raised panel's fill with a colour
+	# of its own: every stylebox background in the panel's subtree is either
+	# fully transparent or exactly the panel's own fill colour.
+	var fill := _p34_box(panel).bg_color
+	_assert(fill.a >= 0.9, "%s: the %s paints an opaque fill" % [tag, name])
+	var nodes: Array = [panel]
+	nodes.append_array(panel.find_children("*", "Control", true, false))
+	for n in nodes:
+		if not (n is Control) or not is_instance_valid(n):
+			continue
+		var c := n as Control
+		for sb_name in ["panel", "normal", "background", "hover", "pressed", "disabled", "focus"]:
+			if not c.has_theme_stylebox_override(sb_name):
+				continue
+			var st := c.get_theme_stylebox(sb_name) as StyleBoxFlat
+			if st == null or st.bg_color.a <= 0.05:
+				continue
+			_assert(
+				st.bg_color == fill,
+				"%s: %s paints %s over the %s fill with %s" % [tag, c.name, sb_name, name, st.bg_color.to_html(true)]
+			)
+
+func _p34_lock_rects(ui: Node, tag: String, expected: Dictionary) -> void:
+	var found := {
+		"log_panel": ui._log_panel,
+		"trade_slot": ui._trade_slot,
+		"trade_frame": ui._trade_frame,
+		"trade_tray": ui._trade_tray,
+		"right_panel": ui._right_panel,
+		"hand_bar": ui._hand_bar_panel,
+		"offer_strip": ui._offer_strip,
+		"board": ui._board_view,
+	}
+	var heading: Array = ui._sidebar_box.find_children("*", "Label", true, false)
+	for h in heading:
+		if (h as Label).text == "EVENT LOG":
+			found["log_heading"] = h as Control
+			break
+	var k := 0
+	for row in ui._scoreboard_box.get_children():
+		found["sb_row_%d" % k] = row as Control
+		k += 1
+	for name in expected:
+		var c: Control = found.get(name)
+		_assert(c != null and is_instance_valid(c), "%s: lock node %s exists" % [tag, String(name)])
+		if c == null or not is_instance_valid(c):
+			continue
+		var got := c.get_global_rect()
+		var want: Rect2 = expected[name]
+		_assert(
+			got.position.distance_to(want.position) < 0.01 and got.size.distance_to(want.size) < 0.01,
+			"%s: %s keeps its rect, got %s want %s" % [tag, String(name), str(got), str(want)]
+		)
+
+func _p34_chrome_checks(ui: Node, tag: String) -> void:
+	var side := _p34_box(ui._right_panel)
+	var trade := _p34_box(ui._trade_frame)
+	var log := _p34_box(ui._log_panel)
+	var tray := _p34_box(ui._trade_tray)
+	_assert(side != null and trade != null and log != null and tray != null, "%s: the sidebar boxes carry their styleboxes" % tag)
+	if side == null or trade == null or log == null or tray == null:
+		return
+	# A. fine lines: one pixel on every area box, one frame around trade content.
+	_assert(side.border_width_left == 1 and side.border_color == Palette.PANEL_LINE, "%s: the board/sidebar divider is a fine line" % tag)
+	_assert(trade.border_width_left == 1 and trade.border_color == Palette.PANEL_LINE, "%s: the trade panel has one 1 px frame" % tag)
+	_assert(tray.border_width_left == 0 and tray.border_width_right == 0 and tray.border_width_top == 0 and tray.border_width_bottom == 0, "%s: the tray draws no second frame" % tag)
+	_assert(log.border_width_left == 1 and log.border_color == Palette.PANEL_LINE, "%s: the event log box has a 1 px frame" % tag)
+	var header := _p34_box(ui._header_panel)
+	_assert(header != null and header.border_width_bottom == 0 and header.border_width_top == 0, "%s: the title band is a plain background with no line" % tag)
+	var pill := _p34_box(ui._header_pill)
+	_assert(pill != null and _p34_border_all(pill) and pill.border_color == Palette.PANEL_LINE, "%s: the title pill is a fine line" % tag)
+	var hand := _p34_box(ui._hand_bar_panel)
+	_assert(hand != null and hand.border_width_top == 1 and hand.border_color == Palette.PANEL_LINE, "%s: the line above the hand bar is fine" % tag)
+	var strip := _p34_box(ui._offer_strip)
+	_assert(strip != null and _p34_border_all(strip) and strip.border_color == Palette.PANEL_LINE, "%s: the offer strip has a fine outline" % tag)
+	var logpop := _p34_box(ui._log_popup)
+	_assert(logpop != null and _p34_border_all(logpop) and logpop.border_color == Palette.PANEL_LINE, "%s: the expanded event log has a fine outline" % tag)
+	var costs := _p34_box(ui._costs_popup)
+	_assert(costs != null and _p34_border_all(costs) and costs.border_color == Palette.PANEL_LINE, "%s: the costs popup has a fine outline" % tag)
+	for modal_name in ["_lobby_overlay", "_settings_overlay", "_help_overlay", "_replays_overlay", "_splash_overlay"]:
+		var overlay: Node = ui.get(modal_name)
+		var box := _p34_any_modal_box(overlay)
+		_assert(box != null and _p34_border_all(box) and box.border_color == Palette.PANEL_LINE, "%s: the %s frame is a fine line" % [tag, String(modal_name)])
+	# B. raised trade panel and log box: equal shadows, one step above the sidebar.
+	_assert(trade.shadow_size > 0 and trade.shadow_size == log.shadow_size, "%s: trade and log share a drop shadow" % tag)
+	_assert(trade.shadow_color == log.shadow_color and trade.shadow_offset == log.shadow_offset, "%s: the two shadows are identical" % tag)
+	_assert(trade.bg_color == log.bg_color, "%s: trade and log share the raised fill" % tag)
+	_assert(tray.bg_color == log.bg_color, "%s: the tray fill matches the raised fill" % tag)
+	# B1 (p34r): the frame is a closed card — 1 px line and radius 8 on all four
+	# sides — and it is inset inside the clipping slot so its whole bottom
+	# shadow draws instead of being cut off at the slot's lower edge.
+	_assert(_p34_border_all(trade), "%s: the trade frame is a 1 px line on all four sides" % tag)
+	_assert(
+		trade.corner_radius_top_left == 8 and trade.corner_radius_top_right == 8 and trade.corner_radius_bottom_left == 8 and trade.corner_radius_bottom_right == 8,
+		"%s: the trade frame rounds all four corners at 8 px" % tag
+	)
+	var slot_r: Rect2 = ui._trade_slot.get_global_rect()
+	var frame_r: Rect2 = ui._trade_frame.get_global_rect()
+	_assert(
+		frame_r.position.x >= slot_r.position.x - 0.01 and frame_r.position.y >= slot_r.position.y - 0.01 and frame_r.end.x <= slot_r.end.x + 0.01 and frame_r.end.y <= slot_r.end.y + 0.01,
+		"%s: the drawn trade frame lies inside the slot's clip rect (%s in %s)" % [tag, str(frame_r), str(slot_r)]
+	)
+	_assert(
+		frame_r.end.y + trade.shadow_offset.y + trade.shadow_size <= slot_r.end.y + 0.01,
+		"%s: the trade frame leaves the full shadow reach below it inside the clip rect" % tag
+	)
+	_assert(frame_r.position.x == slot_r.position.x and frame_r.end.x == slot_r.end.x, "%s: the trade frame keeps the slot's side lines" % tag)
+	_assert(frame_r.position.y == slot_r.position.y, "%s: the trade frame keeps the slot's top line" % tag)
+	# B2 (p34r): nothing painted over either raised panel's fill with its own colour.
+	_p34r_overlay_check(ui._log_panel, tag, "event log box")
+	_p34r_overlay_check(ui._trade_frame, tag, "trade frame")
+	var side_l := _p34_lum(side.bg_color)
+	var fill_l := _p34_lum(trade.bg_color)
+	_assert(fill_l - side_l >= 0.03, "%s: the raised fill is visibly above the sidebar (%.3f vs %.3f)" % [tag, fill_l, side_l])
+	# C0/C. rows read the paper direction in both styles.
+	for row in ui._scoreboard_box.get_children():
+		var card_box: Control = null
+		for chn in (row as Control).get_children():
+			if chn is PanelContainer:
+				card_box = chn as Control
+				break
+		if card_box == null:
+			continue
+		var rst := _p34_box(card_box)
+		if rst == null or rst.bg_color.a < 0.9:
+			continue
+		_assert(_p34_lum(rst.bg_color) > side_l, "%s: a scoreboard row sits above the sidebar fill" % tag)
+		_assert(rst.shadow_size >= 3, "%s: scoreboard rows carry the light shadow" % tag)
+
+func _test_fine_line_chrome_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	await _ui_settle(2)
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	]
+	ui.session.start_match(77313, seats, true, 0)
+	await _ui_settle(6)
+	var ok := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return st.phase == GameTypes.TurnPhase.TURN_MAIN and not ui.session.is_ai_to_act() and st.open_trade.is_empty() and ui.session.get_acting_player_id() == 0
+	)
+	_assert(ok, "the fine line chrome test reached the human's main phase")
+	var st: GameState = ui.session.state
+	for r in GameTypes.ALL_RESOURCES:
+		st.players[0]["hand"][r] = 4
+		st.players[1]["hand"][r] = 4
+		st.players[2]["hand"][r] = 4
+	ui._close_trade_tray_by_user()
+	ui._refresh_ui()
+	root.size = Vector2i(1280, 800)
+	await _ui_settle(4)
+	_style_poke_theme(ui)
+	await _ui_settle(4)
+	_style_poke_theme(ui)
+	await _ui_settle(6)
+	# The locked rects recorded from the pre-restyle build (both styles agree).
+	var expected := {
+		"log_heading": Rect2(772, 543, 460, 20),
+		"log_panel": Rect2(772, 568, 496, 94),
+		"trade_slot": Rect2(772, 346, 496, 192),
+		"trade_frame": Rect2(772, 346, 496, 183),
+		"trade_tray": Rect2(788, 349, 478, 177),
+		"right_panel": Rect2(760, 52, 520, 620),
+		"hand_bar": Rect2(0, 702, 1280, 98),
+		"offer_strip": Rect2(0, 672, 1280, 30),
+		"board": Rect2(0, 52, 760, 620),
+		"sb_row_0": Rect2(772, 83, 496, 34),
+		"sb_row_1": Rect2(772, 121, 496, 34),
+		"sb_row_2": Rect2(772, 159, 496, 34),
+		"sb_row_3": Rect2(772, 197, 496, 34),
+	}
+	_p34_lock_rects(ui, "paper", expected)
+	_p34_chrome_checks(ui, "paper")
+	var counter: PanelContainer = ui._make_counter_partner_card(
+		"Dune", GameTypes.PLAYER_COLORS[1 % GameTypes.PLAYER_COLORS.size()], 1,
+		{"offer": {GameTypes.ResourceType.TIMBER: 1}, "request": {GameTypes.ResourceType.GRAIN: 1}},
+		ui.session.state, false, -1
+	)
+	_assert(counter != null, "the counter-offer card builds for the frame check")
+	if counter != null:
+		var cbox := _p34_box(counter)
+		_assert(cbox != null and cbox.border_width_left == 2 and cbox.border_color == Palette.ACCENT_GOLD, "the counter-offer frame keeps its 2 px gold line")
+		counter.free()
+	ui.set_ui_style("dark")
+	await _ui_settle(6)
+	_p34_lock_rects(ui, "dark", expected)
+	_p34_chrome_checks(ui, "dark")
+	ui._show_toast("p34 chrome probe", Palette.TOAST_TRADE_BG, 30.0)
+	await _ui_settle(2)
+	var toast_box: StyleBoxFlat = null
+	for c in ui._toast_layer.get_children(true):
+		if c is PanelContainer:
+			var tst := _p34_box(c as Control)
+			if tst != null and tst.bg_color.a >= 0.9:
+				toast_box = tst
+	_assert(toast_box != null and toast_box.border_width_left == 1, "the toast on the board carries a 1 px tinted frame")
+	var dark_shadow: Color = Palette.STYLES["dark"]["SHADOW_RAISED"]
+	var raised_dark: Color = Palette.STYLES["dark"]["SURFACE_RAISED"]
+	_assert(_p34_lum(raised_dark) - _p34_lum(Palette.STYLES["dark"]["PANEL_BG_ALT"]) >= 0.03, "the dark raised fill sits one step above the sidebar")
+	_assert(dark_shadow.a >= 0.5, "the dark raised shadow is stronger than paper's")
+	ui.set_ui_style("paper")
+	await _ui_settle(4)
+	var back_trade := _p34_box(ui._trade_frame)
+	var back_log := _p34_box(ui._log_panel)
+	var back_tray := _p34_box(ui._trade_tray)
+	var paper_fill: Color = Palette.STYLES["paper"]["SURFACE_RAISED"]
+	_assert(
+		back_trade != null and back_trade.bg_color == paper_fill and back_log.bg_color == paper_fill and back_tray.bg_color == paper_fill,
+		"toggling back repainted the trade frame, the tray and the log box with the paper fill"
+	)
+	_p34r_overlay_check(ui._log_panel, "paper-back", "event log box")
+	_p34r_overlay_check(ui._trade_frame, "paper-back", "trade frame")
+	_pass_section("138. Fine Line Chrome & Raised Panels Test (1 px area lines, one trade frame, equal raised shadows, row direction and rects locked in both styles)")
+
+
+func _p36_top_bar_checks(ui: Node, tag: String, expect_band_w: float) -> void:
+	var band_r: Rect2 = ui._header_panel.get_global_rect()
+	_assert(
+		band_r.position == Vector2.ZERO and absf(band_r.size.x - expect_band_w) < 0.01 and band_r.size.y == 52,
+		"%s: the band keeps its full height and the canvas width %.1f (%s)" % [tag, expect_band_w, str(band_r)]
+	)
+	var m := clampf(band_r.size.x * 0.0375, 24.0, 96.0)
+	var pill_r: Rect2 = ui._header_pill.get_global_rect()
+	_assert(
+		pill_r.position.distance_to(Vector2(m, 6.0)) < 0.01 and pill_r.size.distance_to(Vector2(band_r.size.x - 2.0 * m, 40.0)) < 0.01,
+		"%s: the pill is 40 px tall, centred at x %.2f (got %s)" % [tag, m, str(pill_r)]
+	)
+	var ps := _p34_box(ui._header_pill)
+	_assert(ps != null, "%s: the pill carries a flat stylebox" % tag)
+	if ps == null:
+		return
+	_assert(
+		ps.corner_radius_top_left == 20 and ps.corner_radius_top_right == 20 and ps.corner_radius_bottom_left == 20 and ps.corner_radius_bottom_right == 20,
+		"%s: the pill ends are fully rounded (radius = half height)" % tag
+	)
+	_assert(_p34_border_all(ps) and ps.border_color == Palette.PANEL_LINE, "%s: the pill has a 1 px fine line" % tag)
+	_assert(ps.bg_color == Palette.SURFACE_RAISED, "%s: the pill is raised surface" % tag)
+	_assert(ps.shadow_color == Palette.SHADOW_RAISED, "%s: the pill shadow uses the raised shadow colour" % tag)
+	_assert(ps.shadow_size == 4 and ps.shadow_offset == Vector2(0, 1), "%s: the pill shadow is the reduced island size" % tag)
+	_assert(pill_r.end.y + ps.shadow_offset.y + ps.shadow_size <= 52.0 + 0.01, "%s: the pill shadow fits inside the band below the pill" % tag)
+	var title: Label = null
+	for c in ui._header_pill.find_children("*", "Label", true, false):
+		if (c as Label).text == "Founders: Barter & Block":
+			title = c as Label
+			break
+	_assert(title != null, "%s: the title lives inside the pill" % tag)
+	var inner := Rect2(pill_r.position + Vector2(14, 3), pill_r.size - Vector2(28, 6))
+	var controls: Array = [ui._menu_btn, ui._help_costs_btn, ui._style_btn, ui._status_banner_label, ui._phase_label, title]
+	if bool(ui._results_btn.visible):
+		controls.append(ui._results_btn)
+	if bool(ui._step_top_btn.visible):
+		controls.append(ui._step_top_btn)
+	for c in controls:
+		var r: Rect2 = (c as Control).get_global_rect()
+		_assert(
+			r.position.x >= inner.position.x - 0.01 and r.end.x <= inner.end.x + 0.01 and r.position.y >= inner.position.y - 0.01 and r.end.y <= inner.end.y + 0.01,
+			"%s: %s stays 14/3 px inside the pill (%s in %s)" % [tag, (c as Node).name, str(r), str(inner)]
+		)
+	_assert((ui._status_banner_label as Control).size.x > 0.0, "%s: the banner still gets real width (%.1f)" % [tag, (ui._status_banner_label as Control).size.x])
+
+func _p36_neighbour_locks(ui: Node) -> void:
+	var wanted := {
+		"board": Rect2(0, 52, 760, 620),
+		"sidebar": Rect2(760, 52, 520, 620),
+		"strip": Rect2(0, 672, 1280, 30),
+		"hand": Rect2(0, 702, 1280, 98),
+	}
+	var found := {
+		"board": ui._board_view,
+		"sidebar": ui._right_panel,
+		"strip": ui._offer_strip,
+		"hand": ui._hand_bar_panel,
+	}
+	for name in wanted:
+		var r: Rect2 = (found[name] as Control).get_global_rect()
+		_assert(r == wanted[name], "%s moved, got %s want %s" % [name, str(r), str(wanted[name])])
+
+func _test_island_top_bar_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	await _ui_settle(2)
+	if ui._splash_overlay != null and ui._splash_overlay.visible:
+		ui._splash_overlay.visible = false
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	]
+	ui.session.start_match(77313, seats, true, 0)
+	await _ui_settle(6)
+	ui._close_trade_tray_by_user()
+	ui._refresh_ui()
+	await _ui_settle(4)
+	_p36_top_bar_checks(ui, "paper", 1280)
+	_p36_neighbour_locks(ui)
+	# The longest prompt in the game with "Step bot" visible: nothing moves out
+	# of the pill, the banner ellipsizes instead of pushing.
+	var banner_backup := String(ui._status_banner_label.text)
+	var step_backup := bool(ui._step_top_btn.visible)
+	ui._step_top_btn.visible = true
+	ui._set_banner("Click a marked player to steal from, or click another hex \u2014 keys 1-4, Esc picks another tile")
+	await _ui_settle(2)
+	_p36_top_bar_checks(ui, "paper longest prompt + step bot", 1280)
+	_assert(
+		(ui._status_banner_label as Label).text_overrun_behavior == TextServer.OVERRUN_TRIM_ELLIPSIS,
+		"the banner still ellipsizes"
+	)
+	ui._set_banner(banner_backup)
+	ui._step_top_btn.visible = step_backup
+	await _ui_settle(2)
+	var paper_fill: Color = Palette.STYLES["paper"]["SURFACE_RAISED"]
+	var paper_line: Color = Palette.STYLES["paper"]["PANEL_LINE"]
+	ui.set_ui_style("dark")
+	await _ui_settle(6)
+	_p36_top_bar_checks(ui, "dark", 1280)
+	ui.set_ui_style("paper")
+	await _ui_settle(6)
+	var back_ps := _p34_box(ui._header_pill)
+	_assert(
+		back_ps != null and back_ps.bg_color == paper_fill and back_ps.border_color == paper_line,
+		"switching back restores the exact paper pill pixels"
+	)
+	_p36_top_bar_checks(ui, "paper again", 1280)
+	# The project stretches with canvas_items/expand: the layout canvas is
+	# max(1280, window_w * 800 / window_h) wide at 800 canvas height, in a real
+	# window exactly as in headless. A 1024x640 window therefore lays out on a
+	# 1280-wide canvas (its on-screen side margin is then 38.4 px = the clamp
+	# formula on the window width, scaled by 0.8); a 1600x900 window lays out
+	# on a rounded 1600*800/900 = 1422 canvas. The clamp runs on the canvas
+	# width; the real 1024 window is verified by screenshot.
+	for size_pair in [[1024, 640, 1280.0], [1600, 900, roundf(1600.0 * 800.0 / 900.0)]]:
+		var w: int = int(size_pair[0])
+		var h: int = int(size_pair[1])
+		root.size = Vector2i(w, h)
+		await _ui_settle(6)
+		_p36_top_bar_checks(ui, "%dx%d" % [w, h], float(size_pair[2]))
+	root.size = Vector2i(1280, 800)
+	await _ui_settle(6)
+	_p36_top_bar_checks(ui, "back to 1280", 1280)
+	# Real clicks: the menu popup still hangs under the menu button, the '?'
+	# opens the costs popup and the pill's switcher flips the style both ways.
+	_ui_real_click(ui._menu_btn)
+	await _ui_settle(3)
+	_assert(bool(ui._menu_popup.visible), "the real click opens the menu popup")
+	var pop_pos: Vector2 = ui._menu_popup.position
+	var pill_r: Rect2 = ui._header_pill.get_global_rect()
+	_assert(
+		pop_pos.x >= pill_r.position.x and pop_pos.y >= pill_r.end.y - 8.0 and pop_pos.y <= pill_r.end.y + 8.0,
+		"the menu popup opens under the menu button just below the pill (%s vs pill %s)" % [str(pop_pos), str(pill_r)]
+	)
+	ui._menu_popup.hide()
+	await _ui_settle(2)
+	_ui_real_click(ui._help_costs_btn)
+	await _ui_settle(3)
+	_assert(bool(ui._costs_popup.visible), "the real click opens the build costs popup")
+	ui._close_costs_popup()
+	await _ui_settle(2)
+	_ui_real_click(ui._style_btn)
+	await _ui_settle(4)
+	_assert(Palette.current_style == "dark", "the pill click switches to dark")
+	_ui_real_click(ui._style_btn)
+	await _ui_settle(4)
+	_assert(Palette.current_style == "paper", "the pill click switches back to paper")
+	_p36_top_bar_checks(ui, "after clicks", 1280)
+	_pass_section("140. Floating Island Top Bar Test (plain 52 px band, centred 40 px pill, clamp margins at three widths, longest prompt, real clicks, both styles)")
+
+
+# --- 141: audit batch A, text and mark contrast in both styles -----------------
+
+func _p37a_toast_check(ui: Node, tab: Dictionary, tag: String) -> void:
+	var tints: Array[Color] = []
+	for pc in GameTypes.PLAYER_COLORS:
+		tints.append(pc)
+	for k in ["STATUS_WARN_TEXT", "STATUS_GOLD_SOFT_TEXT", "TOAST_STEAL_GOOD", "TOAST_STEAL_BAD", "TOAST_NEUTRAL", "HEADING"]:
+		tints.append(tab[k])
+	for tint in tints:
+		var out: Color = ui._toast_text_on_pill(tint)
+		var r := _contrast_ratio(out, tab["TOAST_PILL_BG"])
+		_assert(r >= 4.5, "%s: toast text %s reaches 4.5:1 on the pill (%s = %.2f)" % [tag, str(tint), str(out), r])
+
+
+func _p37a_badge_check(ui: Node, tag: String) -> void:
+	for seat_color in GameTypes.PLAYER_COLORS:
+		var pair: Array = ui._vp_badge_colors(seat_color)
+		var r := _contrast_ratio(pair[1], pair[0])
+		_assert(r >= 4.5, "%s: VP badge text clears 4.5:1 on the %s seat chip (%.2f)" % [tag, str(seat_color), r])
+		var drift := absf((pair[0] as Color).r - seat_color.r) + absf((pair[0] as Color).g - seat_color.g) + absf((pair[0] as Color).b - seat_color.b)
+		_assert(drift <= 0.15, "%s: the badge tint stays the seat colour (%s vs %s)" % [tag, str(pair[0]), str(seat_color)])
+
+
+func _p37a_style_checks(ui: Node, style: String) -> void:
+	ui.set_ui_style(style)
+	var tab: Dictionary = Palette.STYLES[style]
+	var tag := style
+	_p37a_toast_check(ui, tab, tag)
+	for g in ["ACCENT_GREEN", "BUTTON_GREEN_HOVER", "BUTTON_GREEN_PRESSED"]:
+		var r := _contrast_ratio(tab["BUTTON_TEXT_ON_GREEN"], tab[g])
+		_assert(r >= 4.5, "%s: End Turn text clears 4.5:1 on the green fill %s (%.2f)" % [tag, g, r])
+	for bgk in ["SURFACE_RAISED", "ROW_BG", "ROW_BG_ACTIVE", "PANEL_BG_ALT", "PAPER_DARK"]:
+		for fgk in ["STATUS_GOOD_TEXT", "STATUS_BAD_TEXT"]:
+			var r2 := _contrast_ratio(tab[fgk], tab[bgk])
+			_assert(r2 >= 4.5, "%s: status text %s clears 4.5:1 on %s (%.2f)" % [tag, fgk, bgk, r2])
+	var hot: Color = tab["NUMBER_TOKEN_HOT"]
+	var hot_bg := _contrast_ratio(hot, tab["NUMBER_TOKEN_BG"])
+	_assert(hot_bg >= 4.5, "%s: hot token numbers clear 4.5:1 on the token (%.2f)" % [tag, hot_bg])
+	_assert(
+		_contrast_ratio(hot, tab["NUMBER_TOKEN_TEXT"]) >= 1.3,
+		"%s: hot numbers stay apart from the normal ones (%.2f)" % [tag, _contrast_ratio(hot, tab["NUMBER_TOKEN_TEXT"])]
+	)
+	_assert(hot.r >= hot.g + 0.3 and hot.r >= hot.b + 0.3, "%s: hot numbers stay red (%s)" % [tag, str(hot)])
+	var bar: Color = tab["PANEL_BG"]
+	var pulse: Color = tab["DICE_PULSE_RING"]
+	var ring := _contrast_ratio(bar.lerp(Color(pulse.r, pulse.g, pulse.b, 1.0), 0.85), bar)
+	_assert(ring >= 3.0, "%s: the dice pulse ring reaches 3:1 on the hand bar (%.2f)" % [tag, ring])
+	var dis: Color = tab["BUTTON_BG_DISABLED"]
+	var recede := _contrast_ratio(dis, bar)
+	_assert(recede <= 1.35, "%s: disabled fill recedes into the bar (%.2f)" % [tag, recede])
+	var muted := _contrast_ratio(tab["TEXT_MUTED"], dis)
+	_assert(muted >= 3.0, "%s: disabled labels stay readable (%.2f)" % [tag, muted])
+	_assert(
+		absf(_wcag_luminance(tab["BUTTON_BG_HOVER"]) - _wcag_luminance(bar))
+			> absf(_wcag_luminance(tab["BUTTON_BG"]) - _wcag_luminance(bar)),
+		"%s: hover moves away from the bar" % tag
+	)
+	_assert(
+		_contrast_ratio(tab["AWARD_GUARD_PILL_TEXT"], tab["AWARD_GUARD_PILL_BG"]) >= 4.5,
+		"%s: Guard pill text clears 4.5:1 on the pill" % tag
+	)
+	for rowk in ["ROW_BG", "ROW_BG_ACTIVE"]:
+		var pill := _contrast_ratio(tab["AWARD_GUARD_PILL_BG"], tab[rowk])
+		_assert(pill >= 3.0, "%s: Guard pill shows on the %s row (%.2f)" % [tag, rowk, pill])
+		var seat_bg: Color = (tab[rowk] as Color).lerp(tab["PANEL_BORDER"], 0.28)
+		var sr := _contrast_ratio(tab["TEXT"], seat_bg)
+		_assert(sr >= 4.5, "%s: seat-type text clears 4.5:1 on the pill over %s (%.2f)" % [tag, rowk, sr])
+	_p37a_badge_check(ui, tag)
+	if style == "dark":
+		for b in ["PANEL_BG", "PANEL_BG_ALT"]:
+			var br := _contrast_ratio(tab["PANEL_BORDER"], tab[b])
+			_assert(br >= 3.0, "%s: outlines reach 3:1 on %s (%.2f)" % [tag, b, br])
+	var ghost: StyleBoxFlat = ui._step_top_btn.get_theme_stylebox("disabled") as StyleBoxFlat
+	_assert(ghost != null and ghost.bg_color.a < 0.05, "%s: a disabled ghost keeps a transparent fill" % tag)
+	var normal_box: StyleBoxFlat = ui._end_turn_btn.get_theme_stylebox("disabled") as StyleBoxFlat
+	_assert(normal_box != null and normal_box.bg_color == dis, "%s: a disabled normal button uses the receding fill" % tag)
+
+
+func _test_audit_contrast_batch_a_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	ui.auto_ai = false
+	if ui._splash_overlay != null:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	await _ui_settle(4)
+	var seats_ok := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return st.phase == GameTypes.TurnPhase.TURN_MAIN and not ui.session.is_ai_to_act() and st.open_trade.is_empty()
+	)
+	_assert(seats_ok, "the batch A contrast test reached the human's main phase")
+	if not seats_ok:
+		return
+	await _ui_settle(3)
+	_p37a_style_checks(ui, "paper")
+	_p37a_style_checks(ui, "dark")
+	_p37a_style_checks(ui, "paper")
+	ui.set_ui_style("paper")
+	await _ui_settle(3)
+	_assert(Palette.current_style == "paper", "the batch A contrast test ends on paper")
+	_pass_section("141. Audit Contrast Batch A Test (toasts, green End Turn, status text, hot tokens, badges, dice ring, disabled fill, hover, dark outlines, Guard pill, both styles)")
+
+# --- 142: audit batch B, board and card art that must stay light in Dark -------
+
+func _p37b_function_body(source: String, func_name: String) -> String:
+	var marker := "func " + func_name
+	var at := source.find(marker)
+	_assert(at >= 0, "the source holds %s" % func_name)
+	var rest := source.substr(at)
+	var nxt := rest.find("\nstatic func", 1)
+	if nxt < 0:
+		nxt = rest.find("\nfunc ", 1)
+	if nxt > 0:
+		rest = rest.substr(0, nxt)
+	return rest
+
+
+func _p37b_art_style_checks(style: String) -> void:
+	var tab: Dictionary = Palette.STYLES[style]
+	var tag := style
+	var fill_vs_outline := _contrast_ratio(tab["ART_LIGHT"], tab["ART_INK"])
+	_assert(fill_vs_outline >= 3.0, "%s: the build spot fill clears 3:1 on its outline (%.2f)" % [tag, fill_vs_outline])
+	_assert(
+		_contrast_ratio(tab["ART_LIGHT"], tab["ACCENT_GOLD"]) >= 1.5,
+		"%s: the light spot fill stays apart from its gold rim (%.2f)" % [tag, _contrast_ratio(tab["ART_LIGHT"], tab["ACCENT_GOLD"])]
+	)
+	for tkey in tab:
+		var tk := String(tkey)
+		if not (
+			tk.begins_with("FOREST") or tk.begins_with("PASTURE") or tk.begins_with("FIELD")
+				or tk.begins_with("CLAY") or tk.begins_with("MOUNTAIN") or tk.begins_with("BARREN") or tk.begins_with("SEA")
+		):
+			continue
+		var surf: Color = tab[tkey]
+		if _contrast_ratio(tab["ART_LIGHT"], surf) < 3.0 and _contrast_ratio(tab["ART_INK"], surf) < 3.0:
+			_assert(false, "%s: the build spot reads on %s (fill %.2f, outline %.2f)" % [tag, tk, _contrast_ratio(tab["ART_LIGHT"], surf), _contrast_ratio(tab["ART_INK"], surf)])
+	for bgk in ["PANEL_BG", "PANEL_BG_ALT", "ROW_BG", "ROW_BG_ACTIVE", "SURFACE_RAISED"]:
+		var sr := _contrast_ratio(tab["INK_OUTLINE"], tab[bgk])
+		_assert(sr >= 3.0, "%s: seat swatch outlines clear 3:1 on %s (%.2f)" % [tag, bgk, sr])
+	var dr := _contrast_ratio(tab["PANEL_BORDER"], tab["DICE_FACE"])
+	_assert(dr >= 3.0, "%s: the die outline clears 3:1 on the die face (%.2f)" % [tag, dr])
+	var dbr := _contrast_ratio(tab["PANEL_BORDER"], tab["PANEL_BG"])
+	_assert(dbr >= 3.0, "%s: the die outline clears 3:1 on the hand bar (%.2f)" % [tag, dbr])
+	var chip: Color = tab["EMBLEM_CHIP_BG"]
+	if style == "paper":
+		_assert(chip.a == 0.0, "paper draws no emblem chip behind the art (alpha %.2f)" % chip.a)
+	else:
+		for bgk2 in ["PANEL_BG", "PANEL_BG_ALT", "SURFACE_RAISED", "ROW_BG"]:
+			var cr2 := _contrast_ratio(chip, tab[bgk2])
+			_assert(cr2 >= 3.0, "%s: the emblem chip clears 3:1 on %s (%.2f)" % [tag, bgk2, cr2])
+		_assert(
+			_contrast_ratio(tab["ART_INK"], chip) >= 3.0,
+			"%s: emblem ink clears 3:1 on the chip (%.2f)" % [tag, _contrast_ratio(tab["ART_INK"], chip)]
+		)
+		_assert(
+			_contrast_ratio(tab["INK"], chip) >= 3.0,
+			"%s: the fixed emblems' ink clears 3:1 on the chip (%.2f)" % [tag, _contrast_ratio(tab["INK"], chip)]
+		)
+	var blend: Color = Color(0.97, 0.94, 0.86).lerp(tab["DISABLED_CARD"], 0.55)
+	var name_r := _contrast_ratio(tab["INK"], blend)
+	_assert(name_r >= 4.5, "%s: a disabled card's name clears 4.5:1 on the dimmed face (%.2f)" % [tag, name_r])
+	var art_r := _contrast_ratio(blend.lerp(Color(tab["INK"].r, tab["INK"].g, tab["INK"].b, 1.0), 0.7), blend)
+	_assert(art_r >= 3.0, "%s: a disabled card's art clears 3:1 on the dimmed face (%.2f)" % [tag, art_r])
+	if style == "paper":
+		_assert(
+			_contrast_ratio(blend, tab["PANEL_BG"]) >= 1.6,
+			"paper: the dimmed card face stands off the bar (%.2f)" % _contrast_ratio(blend, tab["PANEL_BG"])
+		)
+	else:
+		_assert(
+			_contrast_ratio(blend, tab["PANEL_BG"]) >= 5.0,
+			"dark: the dimmed card face stands off the bar (%.2f)" % _contrast_ratio(blend, tab["PANEL_BG"])
+		)
+
+
+func _test_art_batch_b_body(ui: Node) -> void:
+	var paper: Dictionary = Palette.STYLES["paper"]
+	var dark: Dictionary = Palette.STYLES["dark"]
+	for fixed_key in ["ART_LIGHT", "ART_INK", "DISABLED_CARD"]:
+		var fk := String(fixed_key)
+		_assert(paper[fk] == dark[fk], "%s is the identical colour in both style tables" % fk)
+	_p37b_art_style_checks("paper")
+	_p37b_art_style_checks("dark")
+	var board_src := FileAccess.get_file_as_string("res://scripts/board_view.gd")
+	var paper_rx := RegEx.create_from_string("Palette\\.PAPER\\b")
+	_assert(
+		paper_rx.search_all(board_src).size() == 0,
+		"board art no longer borrows PAPER as white (%d uses left)" % paper_rx.search_all(board_src).size()
+	)
+	var cf_src := FileAccess.get_file_as_string("res://scripts/card_face.gd")
+	var ink_rx := RegEx.create_from_string("Palette\\.INK\\b")
+	for pair in [[_p37b_function_body(cf_src, "_emblem_roadwork"), "road work"], [_p37b_function_body(cf_src, "_emblem_decree"), "decree"]]:
+		var body_text := String(pair[0])
+		_assert(body_text.contains("Palette.ART_LIGHT"), "%s art keeps its light parts light" % String(pair[1]))
+		_assert(body_text.contains("Palette.ART_INK"), "%s art keeps its dark parts dark" % String(pair[1]))
+		_assert(paper_rx.search_all(body_text).size() == 0, "%s art does not borrow PAPER (%d uses)" % [String(pair[1]), paper_rx.search_all(body_text).size()])
+		_assert(ink_rx.search_all(body_text).size() == 0, "%s art does not borrow INK (%d uses)" % [String(pair[1]), ink_rx.search_all(body_text).size()])
+	var die_body := _p37b_function_body(FileAccess.get_file_as_string("res://scripts/main_ui.gd"), "_draw_die")
+	_assert(die_body.contains("Palette.PANEL_BORDER"), "the die border uses the chrome outline like the pill's")
+	_assert(ink_rx.search_all(die_body).size() == 0, "the die border no longer borrows INK (%d uses)" % ink_rx.search_all(die_body).size())
+	var ui_src := FileAccess.get_file_as_string("res://scripts/main_ui.gd")
+	_assert(ui_src.contains("func _set_seat_swatch_color"), "seat swatches are built with a styled helper")
+	var swatch_helper := _p37b_function_body(ui_src, "_set_seat_swatch_color")
+	_assert(swatch_helper.contains("INK_OUTLINE"), "every seat swatch carries the style outline")
+	_assert(cf_src.contains("EMBLEM_CHIP_BG"), "emblem-only faces can sit on a light chip")
+	_assert(cf_src.contains("DISABLED_CARD"), "disabled cards fade to the fixed disabled colour")
+	ui.set_ui_style("dark")
+	await _ui_settle(2)
+	_assert(Palette.EMBLEM_CHIP_BG.a > 0.5, "dark switches the emblem chip on at runtime")
+	ui.set_ui_style("paper")
+	await _ui_settle(2)
+	_assert(Palette.current_style == "paper", "the batch B art test ends on paper")
+	_pass_section("142. Audit Art Batch B Test (build spots, board art, card art, emblem chips, die outlines, swatch outlines, disabled cards, both styles)")
+
+# --- 143: audit batch C, controls that were never themed (both styles) ---------
+
+func _p37c_control_checks(ui: Node, style: String) -> void:
+	ui.set_ui_style(style)
+	await _ui_settle(2)
+	var tab: Dictionary = Palette.STYLES[style]
+	var tag := style
+	var boxes: Array = []
+	for c in ui.find_children("*", "CheckBox", true, false):
+		if c is CheckBox:
+			boxes.append(c)
+	_assert(boxes.size() >= 4, "%s: enough checkboxes exist to check every state" % tag)
+	var seen_checked := false
+	var seen_unchecked := false
+	var idx := 0
+	for b in boxes:
+		var cb := b as CheckBox
+		if idx % 2 == 0:
+			cb.button_pressed = true
+		idx += 1
+		if cb.button_pressed:
+			seen_checked = true
+		else:
+			seen_unchecked = true
+		_assert(cb.theme == ui._check_theme, "%s: the checkbox uses the shared check theme" % tag)
+		for item_name in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color", "font_disabled_color"]:
+			var item := StringName(item_name)
+			var col: Color = cb.get_theme_color(item)
+			_assert(col != Color(1, 1, 1, 1), "%s: %s is themed on the checkbox" % [tag, item_name])
+			for bgk in ["PANEL_BG", "PANEL_BG_ALT"]:
+				var r := _contrast_ratio(col, tab[bgk])
+				_assert(r >= 4.5, "%s: checkbox %s clears 4.5:1 on %s (%.2f)" % [tag, item_name, bgk, r])
+	_assert(seen_checked and seen_unchecked, "%s: both checked and unchecked boxes were seen" % tag)
+	for icon_name in ["unchecked", "checked", "unchecked_disabled", "checked_disabled"]:
+		_assert(ui._check_theme.get_icon(StringName(icon_name), &"CheckBox") != null, "%s: the %s box draws a custom icon" % [tag, icon_name])
+	var box_outline_r := _contrast_ratio(tab["CHECK_BORDER"], tab["PANEL_BG"])
+	_assert(box_outline_r >= 3.0, "%s: the unchecked box outline clears 3:1 on the dialog (%.2f)" % [tag, box_outline_r])
+	var icon_btns := 0
+	for c in ui.find_children("*", "Button", true, false):
+		var bt := c as Button
+		if bt.icon == null:
+			continue
+		icon_btns += 1
+		for pair in [["icon_normal_color", "font_color"], ["icon_hover_color", "font_hover_color"], ["icon_pressed_color", "font_pressed_color"], ["icon_hover_pressed_color", "font_hover_color"], ["icon_focus_color", "font_focus_color"], ["icon_disabled_color", "font_disabled_color"]]:
+			_assert(bt.get_theme_color(StringName(str(pair[0]))) == bt.get_theme_color(StringName(str(pair[1]))), "%s: the %s %s follows %s" % [tag, bt.name, pair[0], pair[1]])
+		var itex: Image = (bt.icon as ImageTexture).get_image()
+		var white := true
+		for py in range(itex.get_height()):
+			for px in range(itex.get_width()):
+				var pc := itex.get_pixel(px, py)
+				if pc.a > 0.95 and (absf(pc.r - 1.0) > 0.01 or absf(pc.g - 1.0) > 0.01 or absf(pc.b - 1.0) > 0.01):
+					white = false
+		_assert(white, "%s: the %s icon texture is a white stencil" % [tag, bt.name])
+	_assert(icon_btns >= 3, "%s: the icon buttons exist to check (%d)" % [tag, icon_btns])
+	var et_was_disabled: bool = ui._end_turn_btn.disabled
+	ui._end_turn_btn.disabled = true
+	_assert(ui._end_turn_btn.get_theme_color("icon_disabled_color") == ui._end_turn_btn.get_theme_color("font_disabled_color"), "%s: a bare disabled flip still colours the icon like the text" % tag)
+	ui._end_turn_btn.disabled = et_was_disabled
+	var opt: OptionButton = ui._num_players_opt
+	_assert(opt.has_theme_icon_override(&"arrow"), "%s: the dropdown arrow is the palette-coloured icon" % tag)
+	var arrow_r := _contrast_ratio(tab["TEXT"], tab["BUTTON_BG"])
+	_assert(arrow_r >= 3.0, "%s: the dropdown arrow clears 3:1 on the fill (%.2f)" % [tag, arrow_r])
+	var pop = opt.get_popup()
+	_assert(pop.get_theme_icon(&"check", &"PopupMenu") != null, "%s: the open list gets a check icon" % tag)
+	_assert(pop.get_theme_icon(&"radio_checked", &"PopupMenu") != null, "%s: the open list gets a filled radio" % tag)
+	_assert(pop.get_theme_icon(&"radio_unchecked", &"PopupMenu") != null, "%s: the open list gets an empty radio" % tag)
+	var speed_box: StyleBoxFlat = ui._review_speed_opt.get_theme_stylebox("normal") as StyleBoxFlat
+	_assert(speed_box != null and speed_box.bg_color == tab["BUTTON_BG"], "%s: the review speed dropdown wears the standard option style" % tag)
+	_assert(ui._review_speed_opt.has_theme_icon_override(&"arrow"), "%s: the review speed arrow matches the other dropdowns" % tag)
+	var th: Theme = ui._ui_theme
+	_assert(ui.theme == th, "%s: the root theme is applied at the UI root" % tag)
+	var tip_box: StyleBoxFlat = th.get_stylebox(&"panel", &"TooltipPanel") as StyleBoxFlat
+	_assert(tip_box != null and tip_box.bg_color == tab["SURFACE_RAISED"], "%s: the tooltip panel is the raised surface" % tag)
+	_assert(tip_box.border_color == tab["PANEL_LINE"], "%s: the tooltip panel keeps the fine line" % tag)
+	_assert(th.get_color(&"font_color", &"TooltipLabel") == tab["TEXT"], "%s: tooltip text is themed" % tag)
+	var tip_r := _contrast_ratio(tab["TEXT"], tab["SURFACE_RAISED"])
+	_assert(tip_r >= 4.5, "%s: tooltip text clears 4.5:1 on the tooltip panel (%.2f)" % [tag, tip_r])
+	for bar_name in ["VScrollBar", "HScrollBar"]:
+		var bn := StringName(bar_name)
+		var track_box: StyleBoxFlat = th.get_stylebox(&"scroll", bn) as StyleBoxFlat
+		var grab_box: StyleBoxFlat = th.get_stylebox(&"grabber", bn) as StyleBoxFlat
+		_assert(track_box != null and grab_box != null, "%s: %s is themed" % [tag, bar_name])
+		_assert(track_box.bg_color == tab["PANEL_BG_ALT"] and grab_box.bg_color == tab["PANEL_BORDER"], "%s: %s colours come from the palette" % [tag, bar_name])
+		var bar_r := _contrast_ratio(tab["PANEL_BORDER"], tab["PANEL_BG_ALT"])
+		_assert(bar_r >= 3.0, "%s: the %s grabber clears 3:1 on its track (%.2f)" % [tag, bar_name, bar_r])
+	var slider_box: StyleBoxFlat = th.get_stylebox(&"slider", &"HSlider") as StyleBoxFlat
+	var sfill_box: StyleBoxFlat = th.get_stylebox(&"grabber_area", &"HSlider") as StyleBoxFlat
+	var sgrab_box: StyleBoxFlat = th.get_stylebox(&"grabber", &"HSlider") as StyleBoxFlat
+	_assert(slider_box != null and sfill_box != null and sgrab_box != null, "%s: the slider is themed" % tag)
+	_assert(slider_box.bg_color == tab["PANEL_BG_ALT"] and sfill_box.bg_color == tab["HEADING"] and sgrab_box.bg_color == tab["PANEL_BORDER"], "%s: the slider colours come from the palette" % tag)
+	var fill_r := _contrast_ratio(tab["HEADING"], tab["PANEL_BG_ALT"])
+	_assert(fill_r >= 3.0, "%s: the slider fill clears 3:1 on the track (%.2f)" % [tag, fill_r])
+	for sep_name in ["VSeparator", "HSeparator"]:
+		var line_box := th.get_stylebox(&"line", StringName(sep_name)) as StyleBoxLine
+		_assert(line_box != null and line_box.color == tab["PANEL_BORDER"], "%s: the %s line is themed" % [tag, sep_name])
+	_assert(ui._replays_overlay.color == Color(tab["SCRIM"], 0.62), "%s: the saved-replays backdrop uses the shared scrim" % tag)
+	await _ui_settle(1)
+
+
+func _p37c_steal_prompt_checks(ui: Node, tag: String) -> void:
+	var st = ui.session.state
+	var topo = HexMath.get_topology()
+	var steal_tile := -1
+	var victim := -1
+	for v in range(st.vertex_owner.size()):
+		var own: int = st.vertex_owner[v]
+		if own > 0:
+			var tiles: Array = topo.vertex_tiles[v]
+			if not tiles.is_empty():
+				steal_tile = int(tiles[0])
+				victim = own
+				break
+	_assert(steal_tile >= 0, "%s: a victim settlement exists for the steal prompt test" % tag)
+	if steal_tile < 0:
+		return
+	var victims: Array[int] = [victim]
+	var no_verts: Array[int] = []
+	var no_edges: Array[int] = []
+	var tiles: Array[int] = []
+	for t_id in range(st.tile_terrains.size()):
+		if t_id != st.blocker_tile:
+			tiles.append(t_id)
+	ui._board_view.set_highlights(BoardView.InteractionMode.PICK_BLOCKER_TILE, no_verts, no_edges, tiles)
+	ui._show_steal_targets(steal_tile, victims)
+	await _ui_settle(2)
+	var banner_before := String(ui._status_banner_label.text)
+	_assert(banner_before.contains("Click a marked player"), "%s: the steal chooser prompts first (%s)" % [tag, banner_before])
+	var next_style := "dark" if Palette.current_style == "paper" else "paper"
+	ui.set_ui_style(next_style)
+	await _ui_settle(2)
+	_assert(String(ui._status_banner_label.text) == banner_before, "%s: a style switch keeps the steal banner" % tag)
+	_assert(int(ui._steal_pending.get("tile_id", -2)) == steal_tile, "%s: a style switch keeps the pending steal tile" % tag)
+	_assert((ui._board_view.get("_steal_targets") as Array).size() == 1, "%s: a style switch keeps the steal targets" % tag)
+	ui.set_ui_style("paper")
+	await _ui_settle(2)
+	ui._cancel_steal_chooser()
+	ui._update_mandatory_board_highlights(ui.session.state, ui.session.get_acting_player_id(), true)
+	await _ui_settle(2)
+
+
+func _test_controls_batch_c_body(ui: Node) -> void:
+	root.size = Vector2i(1280, 800)
+	ui.auto_ai = false
+	if ui._splash_overlay != null:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	await _ui_settle(4)
+	var seats_ok := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return st.turn_number >= 4 and st.phase == GameTypes.TurnPhase.TURN_MAIN and not ui.session.is_ai_to_act() and st.open_trade.is_empty()
+	)
+	_assert(seats_ok, "the batch C controls test reached the human's main phase")
+	if not seats_ok:
+		return
+	await _ui_settle(3)
+	await _p37c_control_checks(ui, "paper")
+	await _p37c_control_checks(ui, "dark")
+	await _p37c_control_checks(ui, "paper")
+	await _p37c_steal_prompt_checks(ui, "live")
+	_assert(Palette.current_style == "paper", "the batch C controls test ends on paper")
+	_pass_section("143. Audit Controls Batch C Test (checkbox states and icons, button icons, dropdown arrows and marks, review bar, root theme, replays scrim, steal prompt, both styles)")
