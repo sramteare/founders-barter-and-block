@@ -480,7 +480,7 @@ func _port_label(port_type: int) -> String:
 
 func _port_color(port_type: int) -> Color:
 	if port_type == GameTypes.PortType.GENERIC_3_TO_1:
-		return Palette.PAPER
+		return Palette.ART_LIGHT
 	return Palette.resource(port_type)
 
 func _resource_color(res: int) -> Color:
@@ -948,7 +948,7 @@ func _render_static_land(ci: CanvasItem) -> void:
 			var paper_pts := PackedVector2Array()
 			for c in corners:
 				paper_pts.append(t_center + (c - t_center) * 1.035)
-			ci.draw_colored_polygon(paper_pts, Palette.PAPER)
+			ci.draw_colored_polygon(paper_pts, Palette.ART_LIGHT)
 			ci.draw_colored_polygon(corners, base_col)
 			_draw_hex_wash(ci, t_center, hex_radius, terrain)
 			ci.draw_polyline(border_pts, Palette.INK_SOFT, 2.0, true)
@@ -1146,9 +1146,9 @@ func _draw_tree(ci: CanvasItem, pos: Vector2, r: float, dark: Color, lite: Color
 	ci.draw_circle(pos - Vector2(0.025 * r, 0.075 * r), 0.04 * r, lite)
 
 func _draw_sheep(ci: CanvasItem, pos: Vector2, r: float) -> void:
-	ci.draw_circle(pos, 0.055 * r, Palette.PAPER)
-	ci.draw_arc(pos, 0.055 * r, 0.0, TAU, 12, Color(Palette.INK_SOFT, 0.8), 1.0, true)
-	ci.draw_circle(pos + Vector2(0.05 * r, -0.015 * r), 0.024 * r, Palette.INK)
+	ci.draw_circle(pos, 0.055 * r, Palette.ART_LIGHT)
+	ci.draw_arc(pos, 0.055 * r, 0.0, TAU, 12, Color(Palette.ART_INK, 0.8), 1.0, true)
+	ci.draw_circle(pos + Vector2(0.05 * r, -0.015 * r), 0.024 * r, Palette.ART_INK)
 
 func _draw_wheat(ci: CanvasItem, pos: Vector2, r: float, dark: Color) -> void:
 	ci.draw_line(pos + Vector2(0, 0.10 * r), pos - Vector2(0, 0.08 * r), dark, maxf(1.5, r * 0.022), true)
@@ -1590,9 +1590,9 @@ func _draw_boat(pos: Vector2, r: float, port_type: int) -> void:
 	draw_colored_polygon(hull, Palette.DOCK_WOOD)
 	var hull_outline := hull.duplicate()
 	hull_outline.append(hull[0])
-	draw_polyline(hull_outline, Palette.INK, 1.5, true)
-	draw_line(pos + Vector2(0, 0.10 * k), pos + Vector2(0, -0.30 * k), Palette.INK, 1.4, true)
-	var sail_col: Color = Palette.PAPER if port_type == GameTypes.PortType.GENERIC_3_TO_1 else Palette.resource(port_type).lightened(0.35)
+	draw_polyline(hull_outline, Palette.ART_INK, 1.5, true)
+	draw_line(pos + Vector2(0, 0.10 * k), pos + Vector2(0, -0.30 * k), Palette.ART_INK, 1.4, true)
+	var sail_col: Color = Palette.ART_LIGHT if port_type == GameTypes.PortType.GENERIC_3_TO_1 else Palette.resource(port_type).lightened(0.35)
 	var mainsail := PackedVector2Array([
 		pos + Vector2(0.02 * k, -0.30 * k),
 		pos + Vector2(0.02 * k, 0.08 * k),
@@ -1601,7 +1601,7 @@ func _draw_boat(pos: Vector2, r: float, port_type: int) -> void:
 	draw_colored_polygon(mainsail, sail_col)
 	var mainsail_outline := mainsail.duplicate()
 	mainsail_outline.append(mainsail[0])
-	draw_polyline(mainsail_outline, Palette.INK, 1.5, true)
+	draw_polyline(mainsail_outline, Palette.ART_INK, 1.5, true)
 	var jib := PackedVector2Array([
 		pos + Vector2(-0.02 * k, -0.17 * k),
 		pos + Vector2(-0.02 * k, 0.06 * k),
@@ -1610,7 +1610,7 @@ func _draw_boat(pos: Vector2, r: float, port_type: int) -> void:
 	draw_colored_polygon(jib, sail_col)
 	var jib_outline := jib.duplicate()
 	jib_outline.append(jib[0])
-	draw_polyline(jib_outline, Palette.INK, 1.5, true)
+	draw_polyline(jib_outline, Palette.ART_INK, 1.5, true)
 	draw_line(pos + Vector2(-0.15 * k, 0.36 * k), pos + Vector2(0.15 * k, 0.36 * k), Color(Palette.SEA_FOAM, 0.9), 1.6, true)
 	draw_line(pos + Vector2(-0.07 * k, 0.42 * k), pos + Vector2(0.07 * k, 0.42 * k), Color(Palette.SEA_FOAM, 0.7), 1.4, true)
 
@@ -1952,8 +1952,9 @@ func _draw_build_any(topo: HexMath.BoardTopology, hex_radius: float) -> void:
 			_draw_settlement(self, vp, hex_radius * 0.22, Color(p_col, 0.55), cur_seat)
 			draw_arc(vp, 8.0, 0.0, TAU, 24, Color(Palette.ACCENT_GOLD, 1.0), 2.0, true)
 		else:
-			draw_circle(vp, 7.0, Palette.PAPER)
+			draw_circle(vp, 7.0, Palette.ART_LIGHT)
 			draw_arc(vp, 7.0, 0.0, TAU, 24, Color(Palette.ACCENT_GOLD, ring_alpha), 2.0, true)
+			draw_arc(vp, 8.9, 0.0, TAU, 24, Color(Palette.ART_INK, 0.95), 1.6, true)
 	for v_id in highlighted_city_vertices:
 		if v_id < 0 or v_id >= topo.vertex_positions.size():
 			continue
@@ -1975,13 +1976,15 @@ func _draw_build_any(topo: HexMath.BoardTopology, hex_radius: float) -> void:
 		else:
 			_draw_settlement(self, spot, hex_radius * 0.22, Color(p_col, 0.85), cur_seat)
 		var pulse_r := hex_radius * (0.30 + 0.035 * sin(_ambient_time * 3.5))
-		draw_arc(spot, pulse_r, 0.0, TAU, 32, Palette.PAPER, 3.6, true)
+		draw_arc(spot, pulse_r + 2.6, 0.0, TAU, 32, Color(Palette.ART_INK, 0.95), 1.6, true)
+		draw_arc(spot, pulse_r, 0.0, TAU, 32, Palette.ART_LIGHT, 3.6, true)
 		draw_arc(spot, pulse_r, 0.0, TAU, 32, Color(Palette.ACCENT_GOLD, 0.95), 2.2, true)
 
 func _draw_city_chevron(vp: Vector2, r: float) -> void:
 	var badge_c := vp + Vector2(0.0, -maxf(15.0, r * 0.42))
-	draw_circle(badge_c, 8.0, Palette.PAPER)
-	draw_arc(badge_c, 8.0, 0.0, TAU, 20, Color(Palette.INK_SOFT, 0.9), 1.4, true)
+	draw_arc(badge_c, 9.2, 0.0, TAU, 20, Color(Palette.ART_INK, 0.95), 1.6, true)
+	draw_circle(badge_c, 8.0, Palette.ART_LIGHT)
+	draw_arc(badge_c, 8.0, 0.0, TAU, 20, Color(Palette.ART_INK, 0.9), 1.4, true)
 	var chevron := PackedVector2Array([
 		badge_c + Vector2(-3.6, 1.9),
 		badge_c + Vector2(0.0, -2.1),
@@ -2025,15 +2028,15 @@ func _draw_city(ci: CanvasItem, center: Vector2, r: float, col: Color, seat: int
 func _draw_seat_mark(ci: CanvasItem, center: Vector2, r: float, seat: int) -> void:
 	match seat:
 		1:
-			ci.draw_circle(center + Vector2(0, r * 0.25), r * 0.22, Palette.PAPER)
-			ci.draw_arc(center + Vector2(0, r * 0.25), r * 0.22, 0.0, TAU, 12, Palette.INK, 1.1, true)
+			ci.draw_circle(center + Vector2(0, r * 0.25), r * 0.22, Palette.ART_LIGHT)
+			ci.draw_arc(center + Vector2(0, r * 0.25), r * 0.22, 0.0, TAU, 12, Palette.ART_INK, 1.1, true)
 		2:
 			var stripe := Rect2(center + Vector2(-r * 0.62, r * 0.08), Vector2(r * 1.24, r * 0.30))
-			ci.draw_rect(stripe, Palette.PAPER)
-			ci.draw_rect(stripe, Palette.INK, false, 1.1)
+			ci.draw_rect(stripe, Palette.ART_LIGHT)
+			ci.draw_rect(stripe, Palette.ART_INK, false, 1.1)
 		3:
-			ci.draw_arc(center + Vector2(0, r * 0.20), r * 0.36, 0.0, TAU, 16, Palette.PAPER, 3.0, true)
-			ci.draw_arc(center + Vector2(0, r * 0.20), r * 0.36, 0.0, TAU, 16, Palette.INK, 1.1, true)
+			ci.draw_arc(center + Vector2(0, r * 0.20), r * 0.36, 0.0, TAU, 16, Palette.ART_LIGHT, 3.0, true)
+			ci.draw_arc(center + Vector2(0, r * 0.20), r * 0.36, 0.0, TAU, 16, Palette.ART_INK, 1.1, true)
 		_:
 			pass
 

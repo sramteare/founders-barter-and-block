@@ -51,6 +51,12 @@ static var RES_IRON: Color = Color(0.55, 0.60, 0.66)
 static var PANEL_BG: Color = Color(0.97, 0.93, 0.832)
 static var PANEL_BG_ALT: Color = Color(0.94, 0.89, 0.77)
 static var PANEL_BORDER: Color = Color(0.55, 0.42, 0.30)
+static var PANEL_LINE: Color = Color(0.5520, 0.4220, 0.3020, 0.45)
+static var SURFACE_RAISED: Color = Color(0.9780, 0.9500, 0.8620)
+static var ROW_BG: Color = Color(0.9730, 0.9330, 0.8345)
+static var ROW_BG_ACTIVE: Color = Color(0.9420, 0.8920, 0.7720)
+static var SHADOW_RAISED: Color = Color(0.2520, 0.1820, 0.1220, 0.30)
+static var ROW_SHADOW: Color = Color(0.2540, 0.1840, 0.1240, 0.16)
 static var TEXT: Color = Color(0.29, 0.221, 0.17)
 static var TEXT_MUTED: Color = Color(0.45, 0.38, 0.30)
 static var TEXT_ON_DARK: Color = Color(0.97, 0.93, 0.833)
@@ -59,9 +65,9 @@ static var ACCENT_GOLD: Color = Color(0.90, 0.68, 0.26)
 static var ACCENT_RED: Color = Color(0.80, 0.37, 0.311)
 static var ACCENT_GREEN: Color = Color(0.42, 0.66, 0.40)
 static var BUTTON_BG: Color = Color(0.90, 0.83, 0.68)
-static var BUTTON_BG_HOVER: Color = Color(0.94, 0.88, 0.74)
+static var BUTTON_BG_HOVER: Color = Color(0.86, 0.78, 0.60)
 static var BUTTON_BG_PRESSED: Color = Color(0.83, 0.75, 0.60)
-static var BUTTON_BG_DISABLED: Color = Color(0.84, 0.81, 0.74)
+static var BUTTON_BG_DISABLED: Color = Color(0.9400, 0.9050, 0.8150)
 static var BUTTON_TEXT: Color = Color(0.29, 0.219, 0.17)
 static var TOAST_BG: Color = Color(0.20, 0.42, 0.40, 0.92)
 static var TOAST_TEXT: Color = Color(0.97, 0.93, 0.83)
@@ -71,8 +77,8 @@ static var HIGHLIGHT_INVALID: Color = Color(0.80, 0.37, 0.309, 0.55)
 # Named chrome and accent shades used by the UI (paper value = today's look)
 static var ACCENT_GOLD_BORDER: Color = Color(0.7650, 0.5780, 0.2210)
 static var ACCENT_GOLD_BORDER_SOFT: Color = Color(0.8100, 0.6120, 0.2340)
-static var STATUS_GOOD_TEXT: Color = Color(0.3150, 0.4950, 0.3000)
-static var STATUS_BAD_TEXT: Color = Color(0.7200, 0.3330, 0.2799)
+static var STATUS_GOOD_TEXT: Color = Color(0.2200, 0.4000, 0.2000)
+static var STATUS_BAD_TEXT: Color = Color(0.6200, 0.2000, 0.1500)
 static var STATUS_WARN_TEXT: Color = Color(0.7650, 0.5780, 0.2200)
 static var STATUS_GOLD_SOFT_TEXT: Color = Color(0.7200, 0.5440, 0.2070)
 static var STATUS_GOLD_STRONG_TEXT: Color = Color(0.6300, 0.4760, 0.1820)
@@ -89,7 +95,7 @@ static var BUTTON_BORDER_PRESSED: Color = Color(0.4950, 0.3780, 0.2700)
 static var SECTION_TAG_TEXT: Color = Color(0.1700, 0.3570, 0.3408)
 static var BUTTON_TEXT_ON_GOLD: Color = Color(0.2910, 0.2190, 0.1700)
 static var BUTTON_TEXT_ON_RED: Color = Color(0.9700, 0.9300, 0.8340)
-static var BUTTON_TEXT_ON_GREEN: Color = Color(0.9700, 0.9305, 0.8330)
+static var BUTTON_TEXT_ON_GREEN: Color = Color(0.1000, 0.1400, 0.1000)
 static var SCRIM: Color = Color(0.2900, 0.2200, 0.1670)
 static var SPLASH_SCRIM: Color = Color(0.1200, 0.0900, 0.0600)
 static var TOAST_STEAL_BAD: Color = Color(0.5500, 0.1800, 0.1400)
@@ -109,19 +115,28 @@ static var CHECK_BORDER: Color = Color(0.5504, 0.4204, 0.3004)
 static var HELP_HEADING: Color = Color(0.1216, 0.3529, 0.3216)
 static var LOG_ERROR_TEXT: Color = Color(0.4784, 0.1647, 0.1255)
 static var AWARD_HIGHLIGHT_BG: Color = Color(0.9600, 0.8980, 0.7060)
+static var DICE_PULSE_RING: Color = Color(0.6200, 0.4200, 0.0800, 0.55)
+static var AWARD_GUARD_PILL_BG: Color = Color(0.3000, 0.3400, 0.4200)
+static var AWARD_GUARD_PILL_TEXT: Color = Color(0.9680, 0.9310, 0.8350)
 
 # Tokens
 static var NUMBER_TOKEN_BG: Color = Color(0.96, 0.92, 0.82)
 static var NUMBER_TOKEN_TEXT: Color = Color(0.29, 0.218, 0.17)
-static var NUMBER_TOKEN_HOT: Color = Color(0.80, 0.37, 0.31)
+static var NUMBER_TOKEN_HOT: Color = Color(0.6200, 0.1500, 0.1000)
 static var BLOCKER: Color = Color(0.32, 0.27, 0.23)
 static var DOCK_WOOD: Color = Color(0.60, 0.45, 0.30)
 static var DICE_FACE: Color = Color(0.97, 0.94, 0.86)
 static var DICE_PIP: Color = Color(0.29, 0.22, 0.17)
 
+# Style-independent art colours: board and card art must read the same in every style.
+static var ART_LIGHT: Color = Color(0.9680, 0.9290, 0.8270)
+static var ART_INK: Color = Color(0.2870, 0.2190, 0.1700)
+static var EMBLEM_CHIP_BG: Color = Color(0.9700, 0.9300, 0.8280, 0.0)
+static var DISABLED_CARD: Color = Color(0.6200, 0.5500, 0.4200)
+
 # Colour styles: a new style is one more entry in STYLES plus its id and label.
 const STYLE_IDS: Array[String] = ["paper", "dark"]
-const STYLE_OPTIONS := {"paper": {"custom_check_icons": false, "toast_text_min_contrast": 0.0, "icon": "sun"}, "dark": {"custom_check_icons": true, "toast_text_min_contrast": 4.5, "icon": "moon"}}
+const STYLE_OPTIONS := {"paper": {"custom_check_icons": true, "toast_text_min_contrast": 4.5, "icon": "sun"}, "dark": {"custom_check_icons": true, "toast_text_min_contrast": 4.5, "icon": "moon"}}
 const STYLE_LABELS := {"paper": "Paper", "dark": "Dark"}
 
 const STYLES := {
@@ -162,6 +177,12 @@ const STYLES := {
 		"PANEL_BG": Color(0.97, 0.93, 0.832),
 		"PANEL_BG_ALT": Color(0.94, 0.89, 0.77),
 		"PANEL_BORDER": Color(0.55, 0.42, 0.30),
+		"PANEL_LINE": Color(0.5520, 0.4220, 0.3020, 0.45),
+		"SURFACE_RAISED": Color(0.9780, 0.9500, 0.8620),
+		"ROW_BG": Color(0.9730, 0.9330, 0.8345),
+		"ROW_BG_ACTIVE": Color(0.9420, 0.8920, 0.7720),
+		"SHADOW_RAISED": Color(0.2520, 0.1820, 0.1220, 0.30),
+		"ROW_SHADOW": Color(0.2540, 0.1840, 0.1240, 0.16),
 		"TEXT": Color(0.29, 0.221, 0.17),
 		"TEXT_MUTED": Color(0.45, 0.38, 0.30),
 		"TEXT_ON_DARK": Color(0.97, 0.93, 0.833),
@@ -170,9 +191,9 @@ const STYLES := {
 		"ACCENT_RED": Color(0.80, 0.37, 0.311),
 		"ACCENT_GREEN": Color(0.42, 0.66, 0.40),
 		"BUTTON_BG": Color(0.90, 0.83, 0.68),
-		"BUTTON_BG_HOVER": Color(0.94, 0.88, 0.74),
+		"BUTTON_BG_HOVER": Color(0.86, 0.78, 0.60),
 		"BUTTON_BG_PRESSED": Color(0.83, 0.75, 0.60),
-		"BUTTON_BG_DISABLED": Color(0.84, 0.81, 0.74),
+		"BUTTON_BG_DISABLED": Color(0.9400, 0.9050, 0.8150),
 		"BUTTON_TEXT": Color(0.29, 0.219, 0.17),
 		"TOAST_BG": Color(0.20, 0.42, 0.40, 0.92),
 		"TOAST_TEXT": Color(0.97, 0.93, 0.83),
@@ -180,8 +201,8 @@ const STYLES := {
 		"HIGHLIGHT_INVALID": Color(0.80, 0.37, 0.309, 0.55),
 		"ACCENT_GOLD_BORDER": Color(0.7650, 0.5780, 0.2210),
 		"ACCENT_GOLD_BORDER_SOFT": Color(0.8100, 0.6120, 0.2340),
-		"STATUS_GOOD_TEXT": Color(0.3150, 0.4950, 0.3000),
-		"STATUS_BAD_TEXT": Color(0.7200, 0.3330, 0.2799),
+		"STATUS_GOOD_TEXT": Color(0.2200, 0.4000, 0.2000),
+		"STATUS_BAD_TEXT": Color(0.6200, 0.2000, 0.1500),
 		"STATUS_WARN_TEXT": Color(0.7650, 0.5780, 0.2200),
 		"STATUS_GOLD_SOFT_TEXT": Color(0.7200, 0.5440, 0.2070),
 		"STATUS_GOLD_STRONG_TEXT": Color(0.6300, 0.4760, 0.1820),
@@ -198,7 +219,7 @@ const STYLES := {
 		"SECTION_TAG_TEXT": Color(0.1700, 0.3570, 0.3408),
 		"BUTTON_TEXT_ON_GOLD": Color(0.2910, 0.2190, 0.1700),
 		"BUTTON_TEXT_ON_RED": Color(0.9700, 0.9300, 0.8340),
-		"BUTTON_TEXT_ON_GREEN": Color(0.9700, 0.9305, 0.8330),
+		"BUTTON_TEXT_ON_GREEN": Color(0.1000, 0.1400, 0.1000),
 		"SCRIM": Color(0.2900, 0.2200, 0.1670),
 		"SPLASH_SCRIM": Color(0.1200, 0.0900, 0.0600),
 		"TOAST_STEAL_BAD": Color(0.5500, 0.1800, 0.1400),
@@ -218,9 +239,16 @@ const STYLES := {
 		"HELP_HEADING": Color(0.1216, 0.3529, 0.3216),
 		"LOG_ERROR_TEXT": Color(0.4784, 0.1647, 0.1255),
 		"AWARD_HIGHLIGHT_BG": Color(0.9600, 0.8980, 0.7060),
+		"DICE_PULSE_RING": Color(0.6200, 0.4200, 0.0800, 0.55),
+		"AWARD_GUARD_PILL_BG": Color(0.3000, 0.3400, 0.4200),
+		"AWARD_GUARD_PILL_TEXT": Color(0.9680, 0.9310, 0.8350),
+		"ART_LIGHT": Color(0.9680, 0.9290, 0.8270),
+		"ART_INK": Color(0.2870, 0.2190, 0.1700),
+		"EMBLEM_CHIP_BG": Color(0.9700, 0.9300, 0.8280, 0.0),
+		"DISABLED_CARD": Color(0.6200, 0.5500, 0.4200),
 		"NUMBER_TOKEN_BG": Color(0.96, 0.92, 0.82),
 		"NUMBER_TOKEN_TEXT": Color(0.29, 0.218, 0.17),
-		"NUMBER_TOKEN_HOT": Color(0.80, 0.37, 0.31),
+		"NUMBER_TOKEN_HOT": Color(0.6200, 0.1500, 0.1000),
 		"BLOCKER": Color(0.32, 0.27, 0.23),
 		"DOCK_WOOD": Color(0.60, 0.45, 0.30),
 		"DICE_FACE": Color(0.97, 0.94, 0.86),
@@ -262,7 +290,13 @@ const STYLES := {
 		"RES_IRON": Color(0.55, 0.60, 0.66),
 		"PANEL_BG": Color(0.15, 0.16, 0.19),
 		"PANEL_BG_ALT": Color(0.19, 0.20, 0.24),
-		"PANEL_BORDER": Color(0.42, 0.44, 0.52),
+		"PANEL_BORDER": Color(0.4700, 0.4900, 0.5700),
+		"PANEL_LINE": Color(0.4215, 0.4415, 0.5215, 0.45),
+		"SURFACE_RAISED": Color(0.2600, 0.2800, 0.3400),
+		"ROW_BG": Color(0.2250, 0.2400, 0.2800),
+		"ROW_BG_ACTIVE": Color(0.1920, 0.2020, 0.2420),
+		"SHADOW_RAISED": Color(0.0100, 0.0080, 0.0060, 0.60),
+		"ROW_SHADOW": Color(0.0120, 0.0100, 0.0080, 0.50),
 		"TEXT": Color(0.90, 0.89, 0.85),
 		"TEXT_MUTED": Color(0.66, 0.66, 0.67),
 		"TEXT_ON_DARK": Color(0.95, 0.93, 0.859),
@@ -282,7 +316,7 @@ const STYLES := {
 		"ACCENT_GOLD_BORDER": Color(0.9190, 0.7200, 0.3200),
 		"ACCENT_GOLD_BORDER_SOFT": Color(0.7500, 0.5800, 0.2600),
 		"STATUS_GOOD_TEXT": Color(0.6200, 0.8600, 0.5800),
-		"STATUS_BAD_TEXT": Color(0.9600, 0.6200, 0.5700),
+		"STATUS_BAD_TEXT": Color(0.9700, 0.6500, 0.6000),
 		"STATUS_WARN_TEXT": Color(0.9400, 0.7800, 0.4200),
 		"STATUS_GOLD_SOFT_TEXT": Color(0.9500, 0.8000, 0.4600),
 		"STATUS_GOLD_STRONG_TEXT": Color(0.9250, 0.7450, 0.3650),
@@ -319,9 +353,16 @@ const STYLES := {
 		"HELP_HEADING": Color(0.5216, 0.8196, 0.7804),
 		"LOG_ERROR_TEXT": Color(0.9098, 0.5216, 0.4706),
 		"AWARD_HIGHLIGHT_BG": Color(0.3200, 0.2800, 0.1600),
+		"DICE_PULSE_RING": Color(0.9750, 0.8350, 0.4450, 0.55),
+		"AWARD_GUARD_PILL_BG": Color(0.5200, 0.5500, 0.6200),
+		"AWARD_GUARD_PILL_TEXT": Color(0.1160, 0.1010, 0.0860),
+		"ART_LIGHT": Color(0.9680, 0.9290, 0.8270),
+		"ART_INK": Color(0.2870, 0.2190, 0.1700),
+		"EMBLEM_CHIP_BG": Color(0.9300, 0.9000, 0.8200, 1.0),
+		"DISABLED_CARD": Color(0.6200, 0.5500, 0.4200),
 		"NUMBER_TOKEN_BG": Color(0.86, 0.82, 0.72),
 		"NUMBER_TOKEN_TEXT": Color(0.16, 0.12, 0.101),
-		"NUMBER_TOKEN_HOT": Color(0.72, 0.22, 0.16),
+		"NUMBER_TOKEN_HOT": Color(0.5500, 0.1200, 0.0900),
 		"BLOCKER": Color(0.32, 0.27, 0.23),
 		"DOCK_WOOD": Color(0.48, 0.36, 0.24),
 		"DICE_FACE": Color(0.90, 0.87, 0.80),

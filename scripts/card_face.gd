@@ -149,24 +149,17 @@ func count_hit_rect() -> Rect2:
 	w = minf(w, minf(size.x, size.y))
 	return Rect2(Vector2(size.x - w, 0.0), Vector2(w, w))
 
-func _emblem_badge_cut(cr: Rect2) -> float:
-	if count_badge and count > 0:
-		return cr.position.y + 2.0 + 2.0 * count_badge_radius() + 2.0
-	return -1000.0
-
 func emblem_bounds() -> Rect2:
+	# One source of truth: the art is placed inside the card face that is
+	# actually drawn (_card_rect). A card that can show a count reserves the
+	# badge headroom whether its count is 0 or 5, so counted and uncounted
+	# cards in one row share frame and art rects, and the badge may overlap
+	# the art instead of cutting it away.
 	var cr := _card_rect()
 	var inner := cr.grow(-4.0)
-	var r: Rect2
 	if show_name and size.x >= 34.0:
-		r = Rect2(inner.position + inner.size * Vector2(0.11, 0.10), inner.size * Vector2(0.78, 0.55))
-	else:
-		r = Rect2(inner.position + inner.size * Vector2(0.09, 0.18), inner.size * Vector2(0.82, 0.64))
-	var cut := _emblem_badge_cut(cr)
-	if r.position.y < cut and r.end.y > cut:
-		r.size.y = maxf(4.0, r.end.y - cut)
-		r.position.y = cut
-	return r
+		return Rect2(inner.position + inner.size * Vector2(0.11, 0.10), inner.size * Vector2(0.78, 0.55))
+	return Rect2(inner.position + inner.size * Vector2(0.09, 0.18), inner.size * Vector2(0.82, 0.64))
 
 func badge_bounds() -> Array[Rect2]:
 	var out: Array[Rect2] = []
@@ -191,7 +184,7 @@ func _badge_rect() -> Rect2:
 func _card_rect() -> Rect2:
 	var lift := 6.0 if selected else (3.0 if _hover else 0.0)
 	var lt := 3.0 + float(stack_depth) * 1.8
-	if (count_badge and count > 0) or badge > 0:
+	if count_badge or badge > 0:
 		lt += 5.0
 	var h := size.y - lt - 3.0
 	if pile_count >= 0:
@@ -204,10 +197,16 @@ func _draw() -> void:
 	if emblem_only:
 		var kind_s := "action" if kind == "action" else "resource"
 		var id_v: int = action if kind_s == "action" else resource
-		draw_emblem(self, kind_s, id_v, Rect2(Vector2.ZERO, size).grow(-1.0), 1.0)
+		var er := Rect2(Vector2.ZERO, size).grow(-1.0)
+		if Palette.EMBLEM_CHIP_BG.a > 0.01:
+			var chip := StyleBoxFlat.new()
+			chip.bg_color = Palette.EMBLEM_CHIP_BG
+			chip.set_corner_radius_all(6)
+			draw_style_box(chip, er)
+		draw_emblem(self, kind_s, id_v, er, 1.0)
 		return
 	var dim := disabled or ((not vivid) and count <= 0 and kind != "back")
-	var a := 0.55 if dim else 1.0
+	var a := 0.7 if dim else 1.0
 	var cr := _card_rect()
 	if pile_count == 0:
 		_draw_pile_slot(cr)
@@ -237,7 +236,8 @@ func _draw() -> void:
 		_draw_badges(cr)
 		return
 	var face := StyleBoxFlat.new()
-	face.bg_color = Color(0.97, 0.94, 0.86, a)
+	var face_base := Color(0.97, 0.94, 0.86)
+	face.bg_color = face_base.lerp(Palette.DISABLED_CARD, 0.55) if dim else face_base
 	face.border_color = Palette.INK
 	face.set_border_width_all(2)
 	face.set_corner_radius_all(7)
@@ -256,23 +256,17 @@ func _draw() -> void:
 	draw_style_box(fs, inner)
 	var font := ThemeDB.fallback_font
 	var want_name := show_name and size.x >= 34.0
-	var emblem_rect := Rect2(inner.position + inner.size * Vector2(0.11, 0.10), inner.size * Vector2(0.78, 0.55))
-	if not want_name:
-		emblem_rect = Rect2(inner.position + inner.size * Vector2(0.09, 0.18), inner.size * Vector2(0.82, 0.64))
-	var badge_cut := _emblem_badge_cut(cr)
-	if emblem_rect.position.y < badge_cut and emblem_rect.end.y > badge_cut:
-		emblem_rect.size.y = maxf(4.0, emblem_rect.end.y - badge_cut)
-		emblem_rect.position.y = badge_cut
+	var emblem_rect := emblem_bounds()
 	if kind == "resource" and resource >= 0:
 		draw_emblem(self, "resource", resource, emblem_rect, a)
 		if want_name:
-			_draw_name(font, cr, GameTypes.resource_name(resource).to_upper(), Color(Palette.INK, a))
+			_draw_name(font, cr, GameTypes.resource_name(resource).to_upper(), Palette.INK)
 	elif kind == "action":
 		draw_emblem(self, "action", action, emblem_rect, a)
 		if want_name:
-			_draw_name(font, cr, CardFace.action_name(action).to_upper(), Color(Palette.INK, a))
+			_draw_name(font, cr, CardFace.action_name(action).to_upper(), Palette.INK)
 	elif want_name:
-		_draw_name(font, cr, "CARD", Color(Palette.INK, a))
+		_draw_name(font, cr, "CARD", Palette.INK)
 	_draw_pile_edges(cr)
 	_draw_badges(cr)
 
@@ -802,11 +796,11 @@ static func _emblem_guard(ci: CanvasItem, rect: Rect2) -> void:
 
 static func _emblem_roadwork(ci: CanvasItem, rect: Rect2) -> void:
 	var dirt := Palette.CLAY_SHADE
-	var dark := Palette.INK
+	var dark := Palette.ART_INK
 	_line(ci, rect.position + Vector2(rect.size.x * 0.08, rect.size.y * 0.85), rect.position + Vector2(rect.size.x * 0.55, rect.size.y * 0.35), dirt, 8.0)
-	_line(ci, rect.position + Vector2(rect.size.x * 0.08, rect.size.y * 0.85), rect.position + Vector2(rect.size.x * 0.55, rect.size.y * 0.35), Palette.PAPER, 1.5)
+	_line(ci, rect.position + Vector2(rect.size.x * 0.08, rect.size.y * 0.85), rect.position + Vector2(rect.size.x * 0.55, rect.size.y * 0.35), Palette.ART_LIGHT, 1.5)
 	_line(ci, rect.position + Vector2(rect.size.x * 0.45, rect.size.y * 0.95), rect.position + Vector2(rect.size.x * 0.95, rect.size.y * 0.55), dirt.darkened(0.1), 8.0)
-	_line(ci, rect.position + Vector2(rect.size.x * 0.45, rect.size.y * 0.95), rect.position + Vector2(rect.size.x * 0.95, rect.size.y * 0.55), Palette.PAPER, 1.5)
+	_line(ci, rect.position + Vector2(rect.size.x * 0.45, rect.size.y * 0.95), rect.position + Vector2(rect.size.x * 0.95, rect.size.y * 0.55), Palette.ART_LIGHT, 1.5)
 	_line(ci, rect.position + Vector2(rect.size.x * 0.55, rect.size.y * 0.35), rect.position + Vector2(rect.size.x * 0.60, rect.size.y * 0.20), dark, 2.0)
 
 static func _emblem_bounty(ci: CanvasItem, rect: Rect2) -> void:
@@ -827,14 +821,14 @@ static func _emblem_bounty(ci: CanvasItem, rect: Rect2) -> void:
 		_circle(ci, gc, rect.size.x * 0.09, [Palette.RES_GRAIN, Palette.RES_FLEECE, Palette.RES_TIMBER][k], dark, 1.0)
 
 static func _emblem_decree(ci: CanvasItem, rect: Rect2) -> void:
-	var parchment := Palette.PAPER
-	var dark := Palette.INK
+	var parchment := Palette.ART_LIGHT
+	var dark := Palette.ART_INK
 	var r := Rect2(rect.position + rect.size * Vector2(0.16, 0.16), rect.size * Vector2(0.68, 0.62))
 	ci.draw_rect(r, _c(parchment))
 	ci.draw_rect(r, dark, false, 1.5)
 	for k in range(3):
 		var y := r.position.y + r.size.y * (0.25 + 0.25 * float(k))
-		_line(ci, Vector2(r.position.x + r.size.x * 0.15, y), Vector2(r.end.x - r.size.x * 0.15, y), Palette.TEXT_MUTED, 1.5)
+		_line(ci, Vector2(r.position.x + r.size.x * 0.15, y), Vector2(r.end.x - r.size.x * 0.15, y), Color(Palette.ART_INK, 0.55), 1.5)
 	_circle(ci, Vector2(r.get_center().x + r.size.x * 0.18, r.end.y + rect.size.y * 0.02), rect.size.x * 0.11, Color(0.65, 0.22, 0.18), dark, 1.0)
 
 static func _emblem_charter(ci: CanvasItem, rect: Rect2) -> void:
