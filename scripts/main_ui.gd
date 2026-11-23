@@ -2624,6 +2624,16 @@ func _announce_steal(state: GameState) -> void:
 			_show_toast("You stole a card from %s." % victim_name, Palette.TOAST_STEAL_GOOD, 3.5)
 	else:
 		_show_toast("%s stole a card from %s." % [thief_name, victim_name], Palette.TOAST_WARN_BG)
+	if thief == v and _board_view != null:
+		var conf_v := _pick_steal_vertex(victim, int(state.blocker_tile))
+		if conf_v >= 0:
+			var conf_res := int(state.last_steal.get("res", -1))
+			var conf_label: String = ""
+			if _human_seat_count() <= 1 and conf_res >= 0:
+				conf_label = "%s · stolen: %s" % [victim_name, GameTypes.resource_name(conf_res)]
+			else:
+				conf_label = "%s · stolen 1 card" % victim_name
+			_board_view.show_steal_confirmation(conf_v, GameTypes.PLAYER_COLORS[victim], conf_label)
 	_start_steal_anim(victim, thief, int(state.last_steal.get("res", -1)), state)
 
 func _on_state_updated(state: GameState, events: Array[String]) -> void:
@@ -2790,7 +2800,9 @@ func _maybe_bot_toast(ev: String, pid: int, state: GameState) -> void:
 
 func _fly_anchor(pid: int) -> Vector2:
 	if pid == _view_pid() and _hand_bar_panel != null and _hand_bar_panel.visible:
-		return _hand_bar_panel.get_global_rect().get_center()
+		var hb: Rect2 = _hand_bar_panel.get_global_rect()
+		if hb.size.x >= 4.0 and hb.size.y >= 4.0:
+			return hb.get_center()
 	var raw: Variant = _scoreboard_row_panels.get(pid, null)
 	if raw is Control and is_instance_valid(raw) and (raw as Control).visible and (raw as Control).is_inside_tree():
 		return (raw as Control).get_global_rect().get_center()
@@ -2874,18 +2886,26 @@ func _launch_steal_flight(serial: int) -> void:
 	)
 	var from := Vector2.INF
 	if victim == v and res >= 0 and not _hand_hidden():
-		var vface: CardFace = _res_card_refs.get(res, null)
-		if vface != null and vface.visible:
-			from = _to_ui_local(vface.get_global_rect().get_center())
+		from = _hand_card_center_ui(res)
 	if from == Vector2.INF:
-		var a_from := _fly_anchor(victim)
-		if a_from != Vector2.INF:
-			from = _to_ui_local(a_from)
+		# Scoreboard-to-scoreboard fallback: even for the viewer, an
+		# unresolvable (hidden or un-laid-out) hand must not turn the hand bar
+		# into an endpoint.
+		var row_from: Variant = _scoreboard_row_panels.get(victim, null)
+		if row_from is Control and is_instance_valid(row_from) and (row_from as Control).visible and (row_from as Control).is_inside_tree():
+			from = _to_ui_local((row_from as Control).get_global_rect().get_center())
+		else:
+			var a_from := _fly_anchor(victim)
+			if a_from != Vector2.INF:
+				from = _to_ui_local(a_from)
 	var to := Vector2.INF
 	if thief == v and res >= 0 and not _hand_hidden():
-		var tface: CardFace = _res_card_refs.get(res, null)
-		if tface != null and tface.visible:
-			to = _to_ui_local(tface.get_global_rect().get_center())
+		if show_face:
+			to = _hand_card_center_ui(res)
+		else:
+			# Hot-seat: the resource is not revealed to this viewer, so the
+			# face-down card must not name it by its position either.
+			to = _hand_resource_group_center_ui()
 	if to == Vector2.INF:
 		var raw_stack: Variant = _scoreboard_mini_hands.get(thief, null)
 		if raw_stack is MiniHandStack and is_instance_valid(raw_stack) and (raw_stack as Control).is_inside_tree():
@@ -2894,6 +2914,37 @@ func _launch_steal_flight(serial: int) -> void:
 		_finish_steal_anim()
 		return
 	_spawn_steal_flyer(from, to, res if show_face else -1, thief, serial)
+
+# Centre of one resource card in the viewer's hand bar (ui-local), or INF
+# while the bar is hidden or has not been laid out yet (no zero-size rects,
+# so a flight can never start or land at (0,0)).
+func _hand_card_center_ui(res: int) -> Vector2:
+	var face: CardFace = _res_card_refs.get(res, null)
+	if face == null or not face.visible:
+		return Vector2.INF
+	var r: Rect2 = face.get_global_rect()
+	if r.size.x < 4.0 or r.size.y < 4.0:
+		return Vector2.INF
+	return _to_ui_local(r.get_center())
+
+func _hand_resource_group_center_ui() -> Vector2:
+	var acc: Rect2 = Rect2()
+	var seen := false
+	for rr in GameTypes.ALL_RESOURCES:
+		var face: CardFace = _res_card_refs.get(int(rr), null)
+		if face == null or not face.visible:
+			continue
+		var r: Rect2 = face.get_global_rect()
+		if r.size.x < 4.0 or r.size.y < 4.0:
+			continue
+		if not seen:
+			acc = r
+			seen = true
+		else:
+			acc = acc.merge(r)
+	if not seen:
+		return Vector2.INF
+	return _to_ui_local(acc.get_center())
 
 func _spawn_steal_flyer(from: Vector2, to: Vector2, res_id: int, thief_pid: int, serial: int) -> void:
 	_last_fly_kind = "resource" if res_id >= 0 else "back"
@@ -2914,8 +2965,7 @@ func _spawn_card_flyer(from: Vector2, to: Vector2, res_id: int, delay: float, on
 		f.kind = "resource"
 		f.resource = res_id
 	f.custom_minimum_size = Vector2(px, px / CardFace.RATIO)
-	var layer: Node = _flight_layer if _flight_layer != null and is_instance_valid(_flight_layer) else self
-	layer.add_child(f)
+	_add_to_flight_layer(f)
 	f.size = Vector2(px, px / CardFace.RATIO)
 	f.pivot_offset = f.size * 0.5
 	f.position = from - f.size * 0.5
@@ -2929,7 +2979,7 @@ func _spawn_card_flyer(from: Vector2, to: Vector2, res_id: int, delay: float, on
 		o.add_theme_stylebox_override("panel", ost)
 		o.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		o.z_index = 2
-		layer.add_child(o)
+		_add_to_flight_layer(o)
 		o.size = f.size
 		o.pivot_offset = f.size * 0.5
 		o.position = f.position
@@ -2982,6 +3032,21 @@ func _build_flight_layer() -> void:
 	_flight_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_flight_layer.z_index = 1
 	add_child(_flight_layer)
+
+# Every node shown in the flight layer must stay click-transparent for its
+# whole life: CardFace._ready and DicePairWidget._ready run during add_child
+# and reset mouse_filter, so the IGNORE is (re-)applied to the full subtree
+# right after the node enters the tree.
+func _add_to_flight_layer(node: Node) -> void:
+	var layer: Node = _flight_layer if _flight_layer != null and is_instance_valid(_flight_layer) else self
+	layer.add_child(node)
+	_set_ignore_tree(node)
+
+func _set_ignore_tree(n: Node) -> void:
+	if n is Control:
+		(n as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for c in n.get_children():
+		_set_ignore_tree(c)
 
 
 func _reset_flight_state() -> void:
@@ -4543,10 +4608,16 @@ func _on_board_tile_clicked(tile_id: int) -> void:
 			_show_steal_targets(tile_id, victims)
 			return
 		var target_opp: int = victims[0] if victims.size() == 1 else -1
+		var tile_before := int(session.state.blocker_tile)
 		if _pending_guard_card:
 			_submit_human_action(GameAction.play_guard(tile_id, target_opp))
 		else:
 			_submit_human_action(GameAction.move_blocker(tile_id, target_opp))
+		# The info toast only when the move really happened: a rejected action
+		# leaves the Blocker elsewhere. Guard plays move the Blocker too
+		# (_execute_blocker_move), so the same check covers both branches.
+		if victims.is_empty() and int(session.state.blocker_tile) == tile_id and tile_id != tile_before:
+			_show_toast("Blocker moved — no one there to steal from.", Palette.TOAST_NEUTRAL, 3.5)
 
 func _show_blocker_ghost(tile_id: int) -> void:
 	if _blocker_ghost == null:
@@ -8126,7 +8197,7 @@ func _start_dice_show(a: int, b: int, hold_s: float) -> void:
 	fx.show_caption = false
 	fx.focus_mode = Control.FOCUS_NONE
 	fx.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_flight_layer.add_child(fx)
+	_add_to_flight_layer(fx)
 	fx.size = fx.custom_minimum_size
 	_dice_show_node = fx
 	var from_c := _to_ui_local(_dice_widget.get_global_rect().get_center())
@@ -8975,8 +9046,13 @@ class DicePairWidget extends Control:
 	func _ready() -> void:
 		var full_w := DICE_SIZE * 2.0 + DICE_GAP + 8.0 + PILL_W + 10.0
 		custom_minimum_size = Vector2(full_w, 78.0)
-		focus_mode = Control.FOCUS_ALL
-		mouse_filter = Control.MOUSE_FILTER_STOP
+		# A display-only copy (DiceShowFX) is added with FOCUS_NONE +
+		# MOUSE_FILTER_IGNORE: honour that so it never eats focus or clicks
+		# from the real widget underneath it.
+		if focus_mode != Control.FOCUS_NONE:
+			focus_mode = Control.FOCUS_ALL
+		if mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			mouse_filter = Control.MOUSE_FILTER_STOP
 		tooltip_text = "Last Roll"
 
 	func set_motion_enabled(on: bool) -> void:
