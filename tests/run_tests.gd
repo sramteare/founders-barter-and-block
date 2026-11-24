@@ -10926,7 +10926,8 @@ func _p34_chrome_checks(ui: Node, tag: String) -> void:
 		if rst == null or rst.bg_color.a < 0.9:
 			continue
 		_assert(_p34_lum(rst.bg_color) > side_l, "%s: a scoreboard row sits above the sidebar fill" % tag)
-		_assert(rst.shadow_size >= 3, "%s: scoreboard rows carry the light shadow" % tag)
+		_assert(rst.shadow_size == ui.SCOREBOARD_ROW_SHADOW_SIZE and rst.shadow_size == 1 and rst.shadow_offset == Vector2(0, 1), "%s: scoreboard rows carry the thin shadow" % tag)
+		_assert(rst.border_width_left == ui.SCOREBOARD_ROW_BORDER and rst.border_width_top == ui.SCOREBOARD_ROW_BORDER and rst.border_width_right == ui.SCOREBOARD_ROW_BORDER and rst.border_width_bottom == ui.SCOREBOARD_ROW_BORDER and ui.SCOREBOARD_ROW_BORDER == 1, "%s: scoreboard rows keep the 1 px transparent border" % tag)
 
 func _test_fine_line_chrome_body(ui: Node) -> void:
 	root.size = Vector2i(1280, 800)

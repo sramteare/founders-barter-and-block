@@ -10,6 +10,8 @@ var _steal_victims: Array[int] = []
 const FPS_ACTIVE := 60
 const FPS_IDLE := 30
 const FPS_IDLE_AFTER_S := 2.0
+const SCOREBOARD_ROW_SHADOW_SIZE := 1
+const SCOREBOARD_ROW_BORDER := 1
 
 static var fps_cap_override: int = -1
 
@@ -3803,10 +3805,10 @@ func _build_scoreboard_row(slot: Control) -> Dictionary:
 	card.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	slot.add_child(card)
 	var st := (card.get_theme_stylebox("panel") as StyleBoxFlat).duplicate()
-	st.set_border_width_all(3)
+	st.set_border_width_all(SCOREBOARD_ROW_BORDER)
 	st.border_color = Color(0, 0, 0, 0)
 	st.shadow_color = Palette.ROW_SHADOW
-	st.shadow_size = 3
+	st.shadow_size = SCOREBOARD_ROW_SHADOW_SIZE
 	st.shadow_offset = Vector2(0, 1)
 	card.add_theme_stylebox_override("panel", st)
 	var row := HBoxContainer.new()
@@ -3935,7 +3937,7 @@ func _sync_scoreboard_rows(state: GameState, view_pid: int, human_seat_n: int, a
 		st.shadow_color = Palette.ROW_SHADOW
 		var tw: Tween = parts["tween"]
 		tw.pause()
-		st.shadow_size = 3
+		st.shadow_size = SCOREBOARD_ROW_SHADOW_SIZE
 		if p_id == focus_pid:
 			_sb_focus_card = card
 			_sb_focus_pcol = pcol
