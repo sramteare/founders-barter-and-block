@@ -3236,7 +3236,10 @@ func _compute_dev_flights(state: GameState) -> void:
 					_dev_spawn_queue.append({"buy": true, "pid": p, "type": int(t), "back": not reveal})
 	_prev_dev_counts = now
 	if not _dev_spawn_queue.is_empty():
-		_schedule_flight_spawn([])
+		# Playing or buying a card rides along with the resource transfers this
+		# same update already queued, so re-arm the timer with that queue rather
+		# than replacing it and dropping the resource flyers.
+		_schedule_flight_spawn(_flight_spawn_queue)
 
 func _spawn_dev_flights() -> void:
 	var reqs: Array = _dev_spawn_queue
@@ -3310,6 +3313,8 @@ func _flush_flight_spawn() -> void:
 	var spawned := 0
 	var delay := 0.0
 	for tr in transfers:
+		if str(tr.get("kind", "")) != "resource":
+			continue
 		if spawned >= 10:
 			break
 		var res_id := int(tr["res"])

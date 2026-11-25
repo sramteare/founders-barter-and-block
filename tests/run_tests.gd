@@ -352,6 +352,7 @@ const SHARD_WEIGHT_SECONDS := {
 	"_test_replay_engine": 1.1,  # 112
 	"_test_sidebar_no_vscroll_body": 1.0,  # 120
 	"_test_p47_early_trade_answer_body": 1.3,  # 150
+	"_test_p48_dev_play_keeps_resource_flights_body": 1.1,  # 151
 }
 
 func _runner_ui_test_bodies() -> Dictionary:
@@ -1589,6 +1590,12 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
 		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
 	], _test_p47_early_trade_answer_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_p48_dev_play_keeps_resource_flights_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -12925,3 +12932,176 @@ func _test_p47_early_trade_answer_body(ui: Node) -> void:
 	ui.trade_pace_override = -1.0
 	root.size = Vector2i(64, 64)
 	_pass_section("150. Early Trade Answer Test (one-human games show Accept/Decline/Counter before the paced AI answers; early decline/accept/counter use the human pid and the offer still resolves; hot-seat keeps watch-only)")
+
+func _p48_flight_layer_cards(ui: Node) -> Array[String]:
+	var out: Array[String] = []
+	for c in ui._flight_layer.get_children():
+		if c is CardFace:
+			var f := c as CardFace
+			if f.kind == "resource":
+				out.append("resource:%d" % int(f.resource))
+			elif f.kind == "action":
+				out.append("action:%d" % int(f.action))
+			elif f.kind == "back":
+				out.append("back")
+	return out
+
+func _p48_clear_flight_layer(ui: Node) -> void:
+	# Only the card flyers are removed: the dice show copy lives in the flight
+	# layer too and must be left alone while its show runs.
+	for c in ui._flight_layer.get_children():
+		if c == ui._dice_show_node:
+			continue
+		if c is CardFace or c is Panel:
+			c.queue_free()
+
+func _p48_queued_from(ui: Node, res: int) -> Dictionary:
+	var out := {}
+	for tr in ui._flight_spawn_queue:
+		if str(tr.get("kind", "")) == "resource" and int(tr.get("res", -1)) == res:
+			out[int(tr["from"])] = int(tr["n"])
+	return out
+
+func _p48_spawned_towards_hand(ui: Node, res: int) -> int:
+	var n := 0
+	for ent in ui._last_flight_targets:
+		if int(ent["to"]) == 0 and int(ent["res"]) == res:
+			n += 1
+	return n
+
+func _test_p48_dev_play_keeps_resource_flights_body(ui: Node) -> void:
+	ui.auto_ai = false
+	root.size = Vector2i(1280, 800)
+	_use_real_frame_rate()
+	ui._reduce_motion = false
+	var CLAY := GameTypes.ResourceType.CLAY
+	var DECREE := GameTypes.DevCardType.TRADE_DECREE
+	var BOUNTY := GameTypes.DevCardType.HARVEST_BOUNTY
+	var takes := {1: 2, 2: 3, 3: 1}
+	var s = ui.session
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	]
+	s.start_match(48048, seats, true, 0)
+	var at_human_main := func(st: GameState) -> bool:
+		return not s.is_ai_to_act() and st.current_player == 0 and st.phase == GameTypes.TurnPhase.TURN_MAIN and st.open_trade.is_empty() and not bool(st.players[0].get("played_dev_this_turn", false))
+	var reached := _ui_drive_until(ui, at_human_main)
+	_assert(reached, "p48: the human's main phase is reachable")
+	if not reached:
+		root.size = Vector2i(64, 64)
+		return
+	await _ui_settle(3)
+	var st: GameState = s.state
+	_assert(not st.dev_deck.is_empty(), "p48: the Action Card deck still has cards")
+	_assert((st.players[0]["dev_cards"] as Array).is_empty(), "p48: the human starts this turn with no Action Card, got %s" % str(st.players[0]["dev_cards"]))
+	for pid in takes.keys():
+		st.players[pid]["hand"][CLAY] = int(takes[pid])
+	for r in [GameTypes.ResourceType.FLEECE, GameTypes.ResourceType.GRAIN, GameTypes.ResourceType.IRON]:
+		st.players[0]["hand"][r] = int(st.players[0]["hand"].get(r, 0)) + 2
+	st.dev_deck[st.dev_deck.size() - 1] = DECREE
+	ui._refresh_ui()
+	await _ui_settle(2)
+	# Buying the decree is the update that teaches the UI the opponents' clay and
+	# the card in hand, the way a real turn would have done it.
+	_ui_real_click(ui._buy_card_btn)
+	await _ui_settle(3)
+	st = s.state
+	_assert((st.players[0]["new_dev_cards"] as Array).has(DECREE), "p48: the real Buy card click took the Trade Decree from the deck, got %s" % str(st.players[0]["new_dev_cards"]))
+	(st.players[0]["new_dev_cards"] as Array).erase(DECREE)
+	(st.players[0]["dev_cards"] as Array).append(DECREE)
+	_p48_clear_flight_layer(ui)
+	await _ui_settle(2)
+	_assert(_p48_flight_layer_cards(ui).is_empty(), "p48: the flight layer is empty before the decree is played, got %s" % str(_p48_flight_layer_cards(ui)))
+	var clay_held := 0
+	for pid in takes.keys():
+		clay_held += int(takes[pid])
+	var my_clay := int(st.players[0]["hand"].get(CLAY, 0))
+	ui._last_flight_targets = []
+	ui._submit_human_action(GameAction.play_trade_decree(CLAY))
+	st = s.state
+	_assert(not (st.players[0]["dev_cards"] as Array).has(DECREE) and bool(st.players[0].get("played_dev_this_turn", false)), "p48: the Trade Decree was played")
+	var q1 := _p48_queued_from(ui, CLAY)
+	for pid in takes.keys():
+		_assert(int(q1.get(pid, -9)) == int(takes[pid]), "p48: the decree update queues %d clay from pid %d, got %s" % [int(takes[pid]), pid, str(q1)])
+	var clay_transfers := 0
+	for tr in ui._flight_spawn_queue:
+		if str(tr.get("kind", "")) == "resource" and int(tr.get("res", -1)) == CLAY:
+			clay_transfers += 1
+	_assert(clay_transfers == 3, "p48: the decree update queues 3 clay transfers, got %d in %s" % [clay_transfers, str(ui._flight_spawn_queue)])
+	var to_hand := true
+	for tr in ui._flight_spawn_queue:
+		if str(tr.get("kind", "")) == "resource" and int(tr.get("res", -1)) == CLAY and int(tr.get("to", -1)) != 0:
+			to_hand = false
+	_assert(to_hand, "p48: every queued clay transfer flies into the human hand, got %s" % str(ui._flight_spawn_queue))
+	_assert(not (ui._dev_spawn_queue as Array).is_empty(), "p48: the played decree is still queued as a card flyer")
+	await _ui_settle(3)
+	var kinds1 := _p48_flight_layer_cards(ui)
+	_assert(kinds1.has("resource:%d" % CLAY), "p48: the decree update flies the clay from the opponents, got %s" % str(kinds1))
+	_assert(kinds1.has("action:%d" % DECREE), "p48: the played decree card still flies, got %s" % str(kinds1))
+	_assert(_p48_spawned_towards_hand(ui, CLAY) == clay_held, "p48: the decree has %d clay flyers spawned towards the human hand, one per card, got %d in %s" % [clay_held, _p48_spawned_towards_hand(ui, CLAY), str(ui._last_flight_targets)])
+	var action_targets := 0
+	for ent in ui._last_flight_targets:
+		if int(ent["res"]) == -1:
+			action_targets += 1
+	_assert(action_targets == 0, "p48: the played card never becomes a resource flight target, got %d in %s" % [action_targets, str(ui._last_flight_targets)])
+	_assert(int(st.players[0]["hand"].get(CLAY, 0)) == my_clay + clay_held, "p48: the decree moved all %d clay into the hand, got %d" % [clay_held, int(st.players[0]["hand"].get(CLAY, 0)) - my_clay])
+	var emptied := true
+	var left_clay := {}
+	for pid in takes.keys():
+		left_clay[pid] = int(st.players[pid]["hand"].get(CLAY, 0))
+		if int(left_clay[pid]) != 0:
+			emptied = false
+	_assert(emptied, "p48: the opponents hold no clay after the decree, got %s" % str(left_clay))
+	# (2) Harvest Bounty: the bank feeds the hand in the update that plays the card.
+	st = s.state
+	(st.players[0]["dev_cards"] as Array).append(BOUNTY)
+	ui._submit_human_action(GameAction.end_turn())
+	var reached2 := _ui_drive_until(ui, at_human_main)
+	_assert(reached2, "p48: the human's next main phase is reachable")
+	if not reached2:
+		_p48_clear_flight_layer(ui)
+		root.size = Vector2i(64, 64)
+		return
+	await _ui_settle(3)
+	_p48_clear_flight_layer(ui)
+	await _ui_settle(2)
+	st = s.state
+	var picks: Array[int] = []
+	for r in GameTypes.ALL_RESOURCES:
+		if picks.size() < 2 and int(st.bank.get(r, 0)) >= 1:
+			picks.append(int(r))
+	_assert(picks.size() == 2, "p48: the bank holds two different resources for the bounty, got %s" % str(st.bank))
+	if picks.size() != 2:
+		_p48_clear_flight_layer(ui)
+		root.size = Vector2i(64, 64)
+		return
+	var r1: int = picks[0]
+	var r2: int = picks[1]
+	var bank1 := int(st.bank.get(r1, 0))
+	var bank2 := int(st.bank.get(r2, 0))
+	var hand1 := int(st.players[0]["hand"].get(r1, 0))
+	var hand2 := int(st.players[0]["hand"].get(r2, 0))
+	ui._last_flight_targets = []
+	ui._submit_human_action(GameAction.play_harvest_bounty(r1, r2))
+	st = s.state
+	_assert(bool(st.players[0].get("played_dev_this_turn", false)), "p48: the Harvest Bounty was played")
+	var qb := _p48_queued_from(ui, r1)
+	var qc := _p48_queued_from(ui, r2)
+	_assert(int(qb.get(-1, -9)) == 1, "p48: the bounty update queues 1 %s from the bank, got %s" % [GameTypes.resource_name(r1), str(qb)])
+	_assert(int(qc.get(-1, -9)) == 1, "p48: the bounty update queues 1 %s from the bank, got %s" % [GameTypes.resource_name(r2), str(qc)])
+	_assert(not (ui._dev_spawn_queue as Array).is_empty(), "p48: the played bounty is still queued as a card flyer")
+	await _ui_settle(3)
+	var kinds2 := _p48_flight_layer_cards(ui)
+	_assert(kinds2.has("resource:%d" % r1), "p48: the bounty update flies %s from the bank, got %s" % [GameTypes.resource_name(r1), str(kinds2)])
+	_assert(kinds2.has("resource:%d" % r2), "p48: the bounty update flies %s from the bank, got %s" % [GameTypes.resource_name(r2), str(kinds2)])
+	_assert(kinds2.has("action:%d" % BOUNTY), "p48: the played bounty card still flies, got %s" % str(kinds2))
+	var bounty_spawned := _p48_spawned_towards_hand(ui, r1) + _p48_spawned_towards_hand(ui, r2)
+	_assert(bounty_spawned == 2, "p48: the bounty has 1 %s + 1 %s spawned towards the human hand, got %d (%d + %d) in %s" % [GameTypes.resource_name(r1), GameTypes.resource_name(r2), bounty_spawned, _p48_spawned_towards_hand(ui, r1), _p48_spawned_towards_hand(ui, r2), str(ui._last_flight_targets)])
+	_assert(int(st.players[0]["hand"].get(r1, 0)) == hand1 + 1 and int(st.bank.get(r1, 0)) == bank1 - 1, "p48: the bounty still paid out 1 %s (%d->%d hand, %d->%d bank)" % [GameTypes.resource_name(r1), hand1, int(st.players[0]["hand"].get(r1, 0)), bank1, int(st.bank.get(r1, 0))])
+	_assert(int(st.players[0]["hand"].get(r2, 0)) == hand2 + 1 and int(st.bank.get(r2, 0)) == bank2 - 1, "p48: the bounty still paid out 1 %s (%d->%d hand, %d->%d bank)" % [GameTypes.resource_name(r2), hand2, int(st.players[0]["hand"].get(r2, 0)), bank2, int(st.bank.get(r2, 0))])
+	_p48_clear_flight_layer(ui)
+	root.size = Vector2i(64, 64)
+	_pass_section("151. p48 Dev Play Keeps Resource Flights Test (Trade Decree and Harvest Bounty fly the resource cards of the same update that plays the Action Card: the spawn queue keeps every transfer to the human hand, the flight layer gets the resource flyers beside the card flyer, and the game state still moves)")
