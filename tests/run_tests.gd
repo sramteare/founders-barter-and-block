@@ -355,6 +355,7 @@ const SHARD_WEIGHT_SECONDS := {
 	"_test_p48_dev_play_keeps_resource_flights_body": 1.1,  # 151
 	"_test_p49_steal_flight_pace_body": 4.6,  # 152
 	"_test_p50_trade_buttons_steady_body": 2.2,  # 153
+	"_test_p51_trade_get_cards_same_height_body": 2.2,  # 154
 }
 
 func _runner_ui_test_bodies() -> Dictionary:
@@ -1610,6 +1611,12 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
 		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
 	], _test_p50_trade_buttons_steady_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_p51_trade_get_cards_same_height_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -13691,3 +13698,163 @@ func _test_p50_trade_buttons_steady_body(ui: Node) -> void:
 	ui.trade_pace_override = -1.0
 	root.size = Vector2i(64, 64)
 	_pass_section("153. p50 Trade Buttons Steady Test (Accept/Decline/Counter keep their exact rects across six offers - before and after an AI answers the same offer, after a compose state and after a plain one, with Accept disabled and enabled, over a one-card and a four-card band; the compose row keeps every button's x, width and height identical across all six drafting states and the bank button keeps that rect for all three of its labels while the row stays one 24 px line, the drafting label is the short count with the full sentence as tooltip, and the offer-cap tray keeps its pre-change shape with 24 px buttons; no button is zero-sized, outside the tray or window or overlapping its neighbour)")
+
+# --- 154: the trade "You get" cards all draw one height (p51) -----------------
+# A get face reserved the count-badge headroom only while it had a count, so in
+# one "You get" row the selected cards (5 px headroom plus the 6 px lift) drew
+# 5 px shorter with their bottoms 6 px higher than the unselected neighbours.
+# Every get face now reserves the headroom, so all five share one drawn card
+# rect and a selection moves a card up by exactly the 6 px lift, never by size.
+
+func _p51_get_faces(ui: Node) -> Array[CardFace]:
+	var out: Array[CardFace] = []
+	for r in GameTypes.ALL_RESOURCES:
+		var f: CardFace = ui._trade_get_faces.get(r, null)
+		_assert(f != null, "p51: the get face for resource %d exists" % int(r))
+		if f != null:
+			out.append(f)
+	return out
+
+func _p51_check_get_row(tag: String, ui: Node, want_selected: int) -> void:
+	var faces := _p51_get_faces(ui)
+	_assert(faces.size() == 5, "%s: the get row has five faces, got %d" % [tag, faces.size()])
+	if faces.size() != 5:
+		return
+	_assert(bool(faces[0].is_visible_in_tree()), "%s: the get row is drawn in the open tray" % tag)
+	var rects: Array[Rect2] = []
+	for f in faces:
+		var cr: Rect2 = f._card_rect()
+		_assert(cr.size.x > 1.0 and cr.size.y > 1.0,
+			"%s: the %s get card rect is real, got %s" % [tag, GameTypes.resource_name(f.resource), str(cr)])
+		rects.append(cr)
+	for i in range(1, 5):
+		_assert(absf(rects[i].size.x - rects[0].size.x) <= 0.01 and absf(rects[i].size.y - rects[0].size.y) <= 0.01,
+			"%s: the %s get card draws the same size as the first (%s vs %s)" % [
+				tag, GameTypes.resource_name(faces[i].resource), str(rects[i].size), str(rects[0].size)])
+		_assert(absf(rects[i].position.x - rects[0].position.x) <= 0.01,
+			"%s: the %s get card draws at the same x as the first (%.2f vs %.2f)" % [
+				tag, GameTypes.resource_name(faces[i].resource), rects[i].position.x, rects[0].position.x])
+	var sel_n := 0
+	var unsel_n := 0
+	var first_sel := -1
+	var first_unsel := -1
+	for i in range(5):
+		if faces[i].selected:
+			sel_n += 1
+			if first_sel < 0:
+				first_sel = i
+			else:
+				_assert(absf(rects[i].position.y - rects[first_sel].position.y) <= 0.01,
+					"%s: the selected get cards share one y (%.2f vs %.2f)" % [tag, rects[i].position.y, rects[first_sel].position.y])
+		else:
+			unsel_n += 1
+			if first_unsel < 0:
+				first_unsel = i
+			else:
+				_assert(absf(rects[i].position.y - rects[first_unsel].position.y) <= 0.01,
+					"%s: the unselected get cards share one y (%.2f vs %.2f)" % [tag, rects[i].position.y, rects[first_unsel].position.y])
+	_assert(sel_n == want_selected, "%s: %d get cards are selected, got %d" % [tag, want_selected, sel_n])
+	_assert(sel_n + unsel_n == 5, "%s: every get card is either selected or not, got %d + %d" % [tag, sel_n, unsel_n])
+	if want_selected > 0 and unsel_n > 0:
+		var lift := rects[first_unsel].position.y - rects[first_sel].position.y
+		_assert(absf(lift - 6.0) <= 0.01,
+			"%s: a selected get card sits exactly the 6 px lift above an unselected one, got %.2f (%.2f vs %.2f)" % [
+				tag, lift, rects[first_sel].position.y, rects[first_unsel].position.y])
+	for i in range(5):
+		var f := faces[i]
+		var name := GameTypes.resource_name(f.resource)
+		_assert(rects[i].encloses(f.emblem_bounds()),
+			"%s: the %s art %s stays inside the drawn card %s" % [tag, name, str(f.emblem_bounds()), str(rects[i])])
+		if int(f.count) > 0:
+			_assert(bool(f.count_badge), "%s: the counted %s get card keeps its badge headroom" % [tag, name])
+			var br: Rect2 = f.count_badge_rect()
+			_assert(Rect2(Vector2.ZERO, f.size).encloses(br),
+				"%s: the %s count badge %s lies inside the face rect %s" % [tag, name, str(br), str(Rect2(Vector2.ZERO, f.size))])
+
+func _p51_check_give_chips(tag: String, ui: Node, want_visible: int) -> void:
+	var kinds := 0
+	for r in GameTypes.ALL_RESOURCES:
+		if int(ui._trade_give_counts.get(r, 0)) > 0:
+			kinds += 1
+	_assert(kinds == want_visible, "%s: %d give kinds are drafted, got %d" % [tag, want_visible, kinds])
+	var shown: Array[CardFace] = []
+	for chip in ui._give_chip_pool:
+		if chip.visible:
+			shown.append(chip)
+	_assert(shown.size() == want_visible, "%s: the give band shows %d chips, got %d" % [tag, want_visible, shown.size()])
+	if shown.is_empty():
+		return
+	var base: Rect2 = shown[0]._card_rect()
+	for i in range(1, shown.size()):
+		var r2: Rect2 = shown[i]._card_rect()
+		_assert(absf(r2.size.x - base.size.x) <= 0.01 and absf(r2.size.y - base.size.y) <= 0.01 and absf(r2.position.x - base.position.x) <= 0.01,
+			"%s: give chip %d draws the same size and x as chip 0 (%s vs %s)" % [tag, i, str(r2), str(base)])
+	for chip in shown:
+		_assert(int(chip.count) > 0 and bool(chip.count_badge),
+			"%s: every visible give chip carries a count with its badge headroom" % tag)
+
+func _test_p51_trade_get_cards_same_height_body(ui: Node) -> void:
+	ui.auto_ai = false
+	ui.trade_pace_override = 0.0
+	root.size = Vector2i(1280, 800)
+	var s = ui.session
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	]
+	s.start_match(50151, seats, true, 0)
+	var reached := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return not s.is_ai_to_act() and st.current_player == 0 and st.phase == GameTypes.TurnPhase.TURN_MAIN and st.open_trade.is_empty()
+	)
+	_assert(reached, "p51: the human's main phase is reachable")
+	if not reached:
+		root.size = Vector2i(64, 64)
+		return
+	await _ui_settle(3)
+	var st: GameState = s.state
+	for r in GameTypes.ALL_RESOURCES:
+		st.bank[r] = int(st.bank.get(r, 0)) + 20
+	await _p50_hand(ui, {
+		GameTypes.ResourceType.TIMBER: 6,
+		GameTypes.ResourceType.CLAY: 8,
+		GameTypes.ResourceType.GRAIN: 4,
+	})
+	if not bool(ui._trade_tray.visible):
+		ui._toggle_trade_tray()
+	await _ui_settle(3)
+	_assert(bool(ui._trade_tray.is_visible_in_tree()), "p51: the trade tray is open")
+	_assert(ui._trade_side_total(ui._trade_give_counts) == 0 and ui._trade_side_total(ui._trade_get_counts) == 0,
+		"p51: both offer sides start empty")
+	# S0: the give side carries chips (real hand clicks) while no get card is
+	# selected - the mixed row the report saw, before any get click.
+	await _p50_click_give(ui, GameTypes.ResourceType.TIMBER, 2)
+	await _p50_click_give(ui, GameTypes.ResourceType.CLAY, 4)
+	await _ui_settle(2)
+	_p51_check_get_row("p51 S0", ui, 0)
+	_p51_check_give_chips("p51 S0", ui, 2)
+	# S1: one get card selected once by a real get click.
+	await _p50_click_get(ui, GameTypes.ResourceType.GRAIN)
+	await _ui_settle(2)
+	_assert(int(ui._trade_get_counts.get(GameTypes.ResourceType.GRAIN, 0)) == 1, "p51 S1: Grain is selected once")
+	_p51_check_get_row("p51 S1", ui, 1)
+	_p51_check_give_chips("p51 S1", ui, 2)
+	# S2: Grain at count 3 (two more real clicks) and a second card at 1.
+	await _p50_click_get(ui, GameTypes.ResourceType.GRAIN)
+	await _p50_click_get(ui, GameTypes.ResourceType.GRAIN)
+	await _p50_click_get(ui, GameTypes.ResourceType.IRON)
+	await _ui_settle(2)
+	_assert(int(ui._trade_get_counts.get(GameTypes.ResourceType.GRAIN, 0)) == 3, "p51 S2: Grain is at count 3")
+	_assert(int(ui._trade_get_counts.get(GameTypes.ResourceType.IRON, 0)) == 1, "p51 S2: Iron is at count 1")
+	_p51_check_get_row("p51 S2", ui, 2)
+	_p51_check_give_chips("p51 S2", ui, 2)
+	# S3: a real Clear brings both sides back to empty and the row keeps one frame.
+	_ui_real_click(ui._trade_clear_btn)
+	await _ui_settle(2)
+	_assert(ui._trade_side_total(ui._trade_get_counts) == 0, "p51 S3: the clear emptied the get side")
+	_p51_check_get_row("p51 S3", ui, 0)
+	_p51_check_give_chips("p51 S3", ui, 0)
+	ui.trade_pace_override = -1.0
+	root.size = Vector2i(64, 64)
+	_pass_section("154. p51 Trade Get Cards Same Height Test (with 0, 1 and 2 get cards selected by real clicks, one of them at count 1 then 3, the five 'You get' faces draw identical card rects and a selection lifts a card by exactly 6 px with no size or x change; each selected card's count badge stays inside its face rect and the emblem art inside the drawn card; the visible give chips draw one shared size and x)")
