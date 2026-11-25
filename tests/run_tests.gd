@@ -353,6 +353,8 @@ const SHARD_WEIGHT_SECONDS := {
 	"_test_sidebar_no_vscroll_body": 1.0,  # 120
 	"_test_p47_early_trade_answer_body": 1.3,  # 150
 	"_test_p48_dev_play_keeps_resource_flights_body": 1.1,  # 151
+	"_test_p49_steal_flight_pace_body": 4.6,  # 152
+	"_test_p50_trade_buttons_steady_body": 2.2,  # 153
 }
 
 func _runner_ui_test_bodies() -> Dictionary:
@@ -1596,6 +1598,18 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
 		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
 	], _test_p48_dev_play_keeps_resource_flights_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Crimson"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Azure"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Amber"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Ivory"),
+	], _test_p49_steal_flight_pace_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_p50_trade_buttons_steady_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -6520,7 +6534,7 @@ func _test_steal_flight_real_body(ui: Node) -> void:
 	_assert(end_pos.x >= 0.0 and end_pos.y >= 0.0 and end_pos.x <= win.size.x and end_pos.y <= win.size.y, "Flyer end inside window: %s" % str(end_pos))
 	# Let the flyer land and confirm holds are cleared.
 	var cleared := false
-	for _j in range(120):
+	for _j in range(240):
 		await _ui_settle(1)
 		if ui._hand_count_hold.is_empty() and ui._res_hold.is_empty():
 			cleared = true
@@ -13105,3 +13119,575 @@ func _test_p48_dev_play_keeps_resource_flights_body(ui: Node) -> void:
 	_p48_clear_flight_layer(ui)
 	root.size = Vector2i(64, 64)
 	_pass_section("151. p48 Dev Play Keeps Resource Flights Test (Trade Decree and Harvest Bounty fly the resource cards of the same update that plays the Action Card: the spawn queue keeps every transfer to the human hand, the flight layer gets the resource flyers beside the card flyer, and the game state still moves)")
+
+func _p49_resource_flyers(ui: Node) -> Array[CardFace]:
+	var out: Array[CardFace] = []
+	for c in ui._flight_layer.get_children():
+		if c == ui._steal_flyer:
+			continue
+		if c is CardFace and (c as CardFace).kind == "resource" and not (c as Node).is_queued_for_deletion():
+			out.append(c as CardFace)
+	return out
+
+func _test_p49_steal_flight_pace_body(ui: Node) -> void:
+	ui.auto_ai = false
+	root.size = Vector2i(1280, 800)
+	ui.turn_min_seconds_override = 0.0
+	ui._reduce_motion = false
+	if ui._board_view != null:
+		ui._board_view.reduce_motion = false
+	var s = ui.session
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Crimson"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Azure"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Amber"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Ivory"),
+	]
+	var found := false
+	var match_no := 0
+	while not found and match_no < 10:
+		match_no += 1
+		s.start_match(49049 + match_no * 7, seats, true, 0)
+		await _ui_settle(2)
+		var prev_serial: int = int(s.state.last_steal.get("serial", 0))
+		var steps := 0
+		while not found and steps < 1200:
+			steps += 1
+			var st: GameState = s.state
+			if st.phase == GameTypes.TurnPhase.GAME_OVER:
+				break
+			var acting := int(s.get_acting_player_id())
+			if s.is_ai_to_act():
+				s.step_ai()
+			elif not st.open_trade.is_empty():
+				var frm: int = int(st.open_trade.get("from", -1))
+				s.submit_action(acting, GameAction.respond_open_trade("decline") if frm != acting else GameAction.cancel_open_trade())
+			elif st.phase == GameTypes.TurnPhase.TURN_MOVE_BLOCKER and acting == 0:
+				var picked := false
+				for tid in range(19):
+					if tid == st.blocker_tile:
+						continue
+					if RulesEngine.get_steal_victims(st, 0, tid).size() >= 1:
+						s.submit_action(0, GameAction.move_blocker(tid, RulesEngine.get_steal_victims(st, 0, tid)[0]))
+						picked = true
+						break
+				if not picked:
+					s.submit_action(0, BotController.choose_action(st, 0, 2))
+			else:
+				s.submit_action(acting, BotController.choose_action(st, acting, 2))
+			await _ui_settle(1)
+			var st2: GameState = s.state
+			var serial: int = int(st2.last_steal.get("serial", 0))
+			if serial > prev_serial:
+				prev_serial = serial
+				var th: int = int(st2.last_steal.get("thief", -1))
+				var vi: int = int(st2.last_steal.get("victim", -1))
+				if th >= 0 and vi >= 0 and th != vi and (th == 0 or vi == 0):
+					found = true
+	_assert(found, "p49: a real Robber steal involving the viewer happens while driving the match")
+	if not found:
+		root.size = Vector2i(64, 64)
+		return
+	_use_real_frame_rate()
+	var layer: Control = ui._flight_layer
+	var thief := int(s.state.last_steal.get("thief", -1))
+	var t0 := -1
+	var serial_at_spawn := -1
+	for _i in range(200):
+		await _ui_settle(1)
+		var fly: Variant = ui._steal_flyer
+		if fly != null and is_instance_valid(fly) and (fly as Node).get_parent() == layer:
+			t0 = Time.get_ticks_msec()
+			serial_at_spawn = int(ui._steal_anim_serial)
+			break
+	_assert(t0 >= 0, "p49: the real steal puts a flyer into the flight layer")
+	if t0 < 0:
+		root.size = Vector2i(64, 64)
+		return
+	_assert(serial_at_spawn == int(s.state.last_steal.get("serial", 0)), "p49: the live steal animation carries the new steal serial, got %d want %d" % [serial_at_spawn, int(s.state.last_steal.get("serial", 0))])
+	var steal_total := GameTypes.hand_total(s.state.players[thief]["hand"])
+	var elapsed := 0
+	while elapsed < 950:
+		await _ui_settle(1)
+		elapsed = Time.get_ticks_msec() - t0
+	var fly_now: Variant = ui._steal_flyer
+	_assert(fly_now != null and is_instance_valid(fly_now) and not (fly_now as Node).is_queued_for_deletion(), "p49: the steal card is still in the air %d ms after the launch" % elapsed)
+	_assert(int(ui._steal_anim_serial) == serial_at_spawn, "p49: the landing callback has not fired %d ms into the flight, serial %d" % [elapsed, int(ui._steal_anim_serial)])
+	_assert(ui._hand_count_hold.has(thief), "p49: the thief's card count is still held %d ms into the flight, got %s" % [elapsed, str(ui._hand_count_hold)])
+	_assert(ui._displayed_hand_count(thief) == steal_total - 1, "p49: the thief still shows the pre-steal count %d ms into the flight, got %d want %d" % [elapsed, ui._displayed_hand_count(thief), steal_total - 1])
+	var t_gone := -1
+	for _i in range(60):
+		await _ui_settle(1)
+		var fly_end: Variant = ui._steal_flyer
+		if fly_end == null or not is_instance_valid(fly_end) or (fly_end as Node).is_queued_for_deletion():
+			t_gone = Time.get_ticks_msec()
+			break
+	_assert(t_gone > 0, "p49: the steal card lands within 1 s of the 0.95 s check")
+	if t_gone > 0:
+		var flight_ms := t_gone - t0
+		_assert(flight_ms >= 1000 and flight_ms <= 1400, "p49: the steal card flies the slower steal base: alive at 0.95 s, gone by 1.4 s, got %d ms" % flight_ms)
+		_assert(ui._steal_flyer == null, "p49: the landing callback drops the flyer reference")
+		_assert(int(ui._steal_anim_serial) == -1, "p49: the landing callback releases the steal serial, got %d" % int(ui._steal_anim_serial))
+		_assert(not ui._hand_count_hold.has(thief), "p49: the landing callback releases the thief's held count, got %s" % str(ui._hand_count_hold))
+		_assert(ui._displayed_hand_count(thief) == GameTypes.hand_total(s.state.players[thief]["hand"]), "p49: the thief shows the real count once the card lands, got %d want %d" % [ui._displayed_hand_count(thief), GameTypes.hand_total(s.state.players[thief]["hand"])])
+	var t0r := -1
+	var flyer_count := 0
+	var attempts := 0
+	while t0r < 0 and attempts < 8:
+		attempts += 1
+		for _w in range(180):
+			await _ui_settle(1)
+			if not ui._steal_anim_active() and _p49_resource_flyers(ui).is_empty():
+				break
+		var rolled := false
+		for _step in range(1500):
+			var st3: GameState = s.state
+			if st3.phase == GameTypes.TurnPhase.GAME_OVER:
+				break
+			if s.is_ai_to_act():
+				s.step_ai()
+				await _ui_settle(1)
+				continue
+			if st3.phase == GameTypes.TurnPhase.TURN_ROLL and int(s.get_acting_player_id()) == 0 and st3.open_trade.is_empty():
+				ui._submit_human_action(GameAction.roll_dice())
+				rolled = true
+				break
+			ui._submit_human_action(BotController.choose_action(st3, int(s.get_acting_player_id()), 2))
+			await _ui_settle(1)
+		if not rolled:
+			break
+		for _i in range(150):
+			await _ui_settle(1)
+			var live := _p49_resource_flyers(ui)
+			if not live.is_empty():
+				t0r = Time.get_ticks_msec()
+				flyer_count = live.size()
+				break
+	_assert(t0r > 0, "p49: a real human dice roll produces a resource flight within 8 rolls")
+	if t0r > 0:
+		var gone_ms := -1
+		for _i in range(120):
+			await _ui_settle(1)
+			if _p49_resource_flyers(ui).is_empty():
+				gone_ms = Time.get_ticks_msec()
+				break
+		_assert(gone_ms > 0, "p49: all %d resource flyers are gone within 2 s of the first sighting" % flyer_count)
+		if gone_ms > 0:
+			var res_ms := gone_ms - t0r
+			var upper := 880 + 70 * (flyer_count - 1) + 150
+			_assert(res_ms >= 850 and res_ms <= upper, "p49: the ordinary %d-flyer resource flight keeps the 0.7 s base: gone between 850 and %d ms, got %d" % [flyer_count, upper, res_ms])
+	root.size = Vector2i(64, 64)
+	_pass_section("152. p49 Steal Flight Pace Test (a real Robber steal flies its card on the slower steal base: still in the air with the thief's count held at 0.95 s, landed with the count released by 1.4 s, while an ordinary dice production flight is still gone by ~1 s)")
+
+# --- 153: the trade tray buttons keep their rects (p50) -----------------------
+# The compose row's Bank/Port button used to live between "Clear" and the offers
+# label and only appeared for a valid bank swap, so the button sliding in, out or
+# to a longer label moved "Clear" and the label and stretched the whole row; the
+# answer row's Accept carried SIZE_EXPAND_FILL, so Decline and Counter started at
+# a different x for every offer, depending on what the tray showed before.
+
+func _p50_snap(pairs: Array) -> Dictionary:
+	var out := {}
+	for p in pairs:
+		var b := p[1] as Button
+		if b == null or not bool(b.is_visible_in_tree()):
+			continue
+		out[str(p[0])] = b.get_global_rect()
+	return out
+
+func _p50_compose_pairs(ui: Node) -> Array:
+	return [
+		["Ask players", ui._trade_ask_btn],
+		["Send new offer", ui._trade_resend_btn],
+		["Bank button", ui._trade_ratio_btn],
+		["Clear", ui._trade_clear_btn],
+	]
+
+func _p50_answer_pairs(ui: Node) -> Array:
+	return [
+		["Accept", ui._ot_accept_btn],
+		["Decline", ui._ot_decline_btn],
+		["Counter", ui._ot_counter_btn],
+	]
+
+# The row's visible buttons: the count is checked first so a row that painted
+# nothing cannot pass the loop checks below it, then every rect is real, inside
+# the tray, and clear of its neighbours.
+func _p50_row_invariants(ui: Node, tag: String, pairs: Array, row_name: String, want_count: int) -> void:
+	var snap := _p50_snap(pairs)
+	_assert(snap.size() == want_count, "%s: the %s shows %d buttons, got %d (%s)" % [tag, row_name, want_count, snap.size(), str(snap.keys())])
+	if snap.is_empty():
+		return
+	var keys: Array = snap.keys()
+	var tray: Rect2 = ui._trade_tray.get_global_rect()
+	for i in range(keys.size()):
+		var r: Rect2 = snap[keys[i]]
+		_assert(r.size.x > 0.0 and r.size.y > 0.0, "%s: the %s button '%s' has a real size, got %s" % [tag, row_name, str(keys[i]), str(r)])
+		_assert(tray.grow(0.5).encloses(r), "%s: the %s button '%s' %s lies inside the tray %s" % [tag, row_name, str(keys[i]), str(r), str(tray)])
+	for i in range(keys.size()):
+		for j in range(i + 1, keys.size()):
+			var a: Rect2 = snap[keys[i]]
+			var b: Rect2 = snap[keys[j]]
+			_assert(not a.intersects(b), "%s: '%s' %s and '%s' %s do not overlap" % [tag, str(keys[i]), str(a), str(keys[j]), str(b)])
+
+func _p50_same(tag: String, key: String, ra: Dictionary, rb: Dictionary, sa: String, sb: String, keep_y: bool) -> bool:
+	if not ra.has(key) or not rb.has(key):
+		return false
+	var a: Rect2 = ra[key]
+	var b: Rect2 = rb[key]
+	var same := absf(a.position.x - b.position.x) <= 0.5 and absf(a.size.x - b.size.x) <= 0.5 and absf(a.size.y - b.size.y) <= 0.5
+	if keep_y:
+		same = same and absf(a.position.y - b.position.y) <= 0.5
+	var what := "whole rect" if keep_y else "x, width and height"
+	_assert(same, "%s: '%s' keeps its %s between %s (%s) and %s (%s)" % [tag, key, what, sa, str(a), sb, str(b)])
+	return true
+
+# Which compose states must agree, and whether the y is included. Since p50c the
+# bank button lives in a slot that reserves its measured width while a plain offer
+# is drafted, so every pair of the six drafting states must agree on x, width and
+# height for every button visible in both - the button appearing, disappearing or
+# relabelling moves nothing. The y is asserted only inside the group {B, C, P, E}:
+# A (no chips drafted, the taller "click a card" hint) and D (two kinds on both
+# chip bands) already sat 6 px lower / 39 px lower before p50c, because the band
+# above the row is what moves it.
+const _P50_COMPOSE_Y_GROUP: Array[String] = ["B", "C", "P", "E"]
+
+func _p50_compare_compose(tag: String, snaps: Dictionary, keys: Array[String]) -> void:
+	var states: Array = snaps.keys()
+	_assert(states.size() == 6, "%s: all six compose states were measured, got %s" % [tag, str(states)])
+	_assert(keys.size() == 4, "%s: four compose buttons are compared, got %s" % [tag, str(keys)])
+	var compared := 0
+	for i in range(states.size()):
+		for j in range(i + 1, states.size()):
+			for key in keys:
+				if _p50_same(tag, key, snaps[str(states[i])], snaps[str(states[j])], str(states[i]), str(states[j]), false):
+					compared += 1
+	_assert(compared == 33, "%s: %d compose buttons were compared across the fifteen pairs, expected 33 (A, B, E show 2 buttons, C, P, D show 3)" % [tag, compared])
+	# The bank button must keep its rect for every label it can carry.
+	_p50_same(tag, "Bank button", snaps["C"], snaps["P"], "C/Bank 4:1", "P/Port 2:1", false)
+	_p50_same(tag, "Bank button", snaps["C"], snaps["D"], "C/Bank 4:1", "D/Bank / Port", false)
+	# States that share the chip band also share the row's y.
+	for k in range(1, _P50_COMPOSE_Y_GROUP.size()):
+		var sa := _P50_COMPOSE_Y_GROUP[k - 1]
+		var sb := _P50_COMPOSE_Y_GROUP[k]
+		_assert(snaps.has(sa) and snaps.has(sb), "%s: the y group has both states %s and %s" % [tag, sa, sb])
+		for key in keys:
+			_p50_same(tag, key, snaps[sa], snaps[sb], sa, sb, true)
+
+# The compose row is a single 24 px line and the offers label never wraps on it.
+func _p50_row_fit(ui: Node, tag: String) -> void:
+	var rr: Rect2 = ui._trade_btn_row.get_global_rect()
+	_assert(absf(rr.size.y - 24.0) <= 0.5, "%s: the compose row is one 24 px line, got %.1f px" % [tag, rr.size.y])
+	var lr: Rect2 = ui._trade_offers_lbl.get_global_rect()
+	_assert(lr.size.y < 20.0, "%s: the offers label keeps its one line, got %.1f px" % [tag, lr.size.y])
+
+# No button may sit outside the window (the tray rect is checked separately).
+func _p50_inside_window(ui: Node, tag: String, snap: Dictionary) -> void:
+	var win: Rect2 = ui.get_viewport().get_visible_rect()
+	for key in snap.keys():
+		var r: Rect2 = snap[key]
+		_assert(win.encloses(r.grow(-0.5)), "%s: the '%s' button %s stays inside the window" % [tag, str(key), str(r)])
+
+func _p50_compare_answers(tag: String, snaps: Dictionary) -> void:
+	var states: Array = snaps.keys()
+	_assert(states.size() == 6, "%s: all six answer states were measured, got %s" % [tag, str(states)])
+	var keys: Array = ["Accept", "Decline", "Counter"]
+	for i in range(states.size()):
+		for j in range(i + 1, states.size()):
+			for key in keys:
+				_p50_same(tag, key, snaps[str(states[i])], snaps[str(states[j])], str(states[i]), str(states[j]), true)
+
+func _p50_hand(ui: Node, map: Dictionary) -> void:
+	var hand: Dictionary = ui.session.state.players[0]["hand"]
+	for r in GameTypes.ALL_RESOURCES:
+		hand[r] = int(map.get(r, 0))
+	ui._refresh_ui()
+	await _ui_settle(2)
+
+func _p50_click_give(ui: Node, res: int, times: int) -> void:
+	for _i in range(times):
+		_ui_real_click(ui._res_card_refs[res])
+		await _ui_settle(1)
+
+func _p50_click_get(ui: Node, res: int) -> void:
+	_ui_real_click(ui._trade_get_faces[res])
+	await _ui_settle(1)
+
+# The p47 offer flow, ending with the human's own real Decline click.
+func _p50_decline_and_close(ui: Node) -> void:
+	_ui_real_click(ui._ot_decline_btn)
+	await _ui_settle(2)
+	_assert(_p47_resolve_offer(ui), "p50: the AIs answer and the declined offer closes")
+	await _ui_settle(2)
+
+# A wider AI offer posted through the real session API (four kinds for one Iron):
+# the tray draws a wider band above the answer row, so an answer button that grows
+# with the row shows up here.
+func _p50_wide_offer(ui: Node) -> void:
+	var st: GameState = ui.session.state
+	st.open_trade.clear()
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = 1
+	st.open_trades_this_turn = 0
+	_p47_zero_hands(st)
+	for r in GameTypes.ALL_RESOURCES:
+		st.players[1]["hand"][r] = 3
+	st.players[0]["hand"][GameTypes.ResourceType.IRON] = 1
+	ui._trade_tray.visible = false
+	ui._trade_respond_mode = false
+	ui._trade_counter_mode = false
+	ui._trade_reopen_token = ""
+	ui._trade_opened_auto = false
+	ui._reset_trade_counts()
+	ui._refresh_ui()
+	await _ui_settle(2)
+	var wide := {}
+	for r in GameTypes.ALL_RESOURCES:
+		if r != GameTypes.ResourceType.IRON:
+			wide[r] = 1
+	var opened: Dictionary = ui.session.submit_action(1, GameAction.open_trade(wide, {GameTypes.ResourceType.IRON: 1}))
+	_assert(bool(opened.get("ok", false)), "p50 I: the four-kind offer is posted, got %s" % str(opened))
+	await _ui_settle(4)
+
+func _test_p50_trade_buttons_steady_body(ui: Node) -> void:
+	ui.auto_ai = false
+	ui.trade_pace_override = 0.0
+	root.size = Vector2i(1280, 800)
+	var s = ui.session
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	]
+	s.start_match(50050, seats, true, 0)
+	var reached := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return not s.is_ai_to_act() and st.current_player == 0 and st.phase == GameTypes.TurnPhase.TURN_MAIN and st.open_trade.is_empty()
+	)
+	_assert(reached, "p50: the human's main phase is reachable")
+	if not reached:
+		root.size = Vector2i(64, 64)
+		return
+	await _ui_settle(3)
+	# A controlled hand and one owned Timber 2:1 port (the p38 recipe), so the give
+	# side can make a plain 4:1 swap and a mixed Bank / Port one.
+	var st: GameState = s.state
+	for v in range(st.vertex_owner.size()):
+		if int(st.vertex_owner[v]) == 0:
+			st.vertex_building[v] = GameTypes.BuildingType.NONE
+	var v_timber := -1
+	for v in range(st.vertex_ports.size()):
+		if int(st.vertex_ports[v]) == GameTypes.PortType.TIMBER_2_TO_1:
+			v_timber = v
+			break
+	_assert(v_timber != -1, "p50: the board has a Timber 2:1 port")
+	st.vertex_owner[v_timber] = 0
+	st.vertex_building[v_timber] = GameTypes.BuildingType.SETTLEMENT
+	for r in [GameTypes.ResourceType.GRAIN, GameTypes.ResourceType.IRON, GameTypes.ResourceType.CLAY]:
+		st.bank[r] = int(st.bank.get(r, 0)) + 20
+	var CLAY := GameTypes.ResourceType.CLAY
+	var GRAIN := GameTypes.ResourceType.GRAIN
+	var IRON := GameTypes.ResourceType.IRON
+	var TIMBER := GameTypes.ResourceType.TIMBER
+	await _p50_hand(ui, {TIMBER: 6, CLAY: 8, GRAIN: 4})
+	if not bool(ui._trade_tray.visible):
+		ui._toggle_trade_tray()
+	await _ui_settle(3)
+	_assert(bool(ui._trade_tray.is_visible_in_tree()), "p50: the trade tray is open")
+	_assert(ui._trade_side_total(ui._trade_give_counts) == 0 and ui._trade_side_total(ui._trade_get_counts) == 0,
+		"p50 A: both offer sides start empty")
+	# A: tray open, nothing selected.
+	var snap_a := _p50_snap(_p50_compose_pairs(ui))
+	_p50_row_invariants(ui, "p50 A", _p50_compose_pairs(ui), "compose row", 2)
+	_p50_row_fit(ui, "p50 A")
+	# B: 1 Clay (real hand click) for 1 Grain (real get click): no bank swap.
+	await _p50_click_give(ui, CLAY, 1)
+	await _p50_click_get(ui, GRAIN)
+	await _ui_settle(2)
+	_assert(ui._trade_side_total(ui._trade_give_counts) == 1 and ui._trade_side_total(ui._trade_get_counts) == 1,
+		"p50 B: the real clicks put 1 Clay up for 1 Grain")
+	_assert(not bool(ui._trade_ratio_btn.is_visible_in_tree()), "p50 B: a 1-for-1 offer shows no bank button")
+	var snap_b := _p50_snap(_p50_compose_pairs(ui))
+	_p50_row_invariants(ui, "p50 B", _p50_compose_pairs(ui), "compose row", 2)
+	_p50_row_fit(ui, "p50 B")
+	# C: the same give chip at 4 Clay: the bank button appears.
+	await _p50_click_give(ui, CLAY, 3)
+	await _ui_settle(2)
+	_assert(int(ui._trade_give_counts.get(CLAY, 0)) == 4, "p50 C: 4 Clay selected by real clicks")
+	_assert(bool(ui._trade_ratio_btn.is_visible_in_tree()), "p50 C: 4 Clay for 1 card shows the bank button")
+	_assert(str(ui._trade_ratio_btn.text) == "Bank 4:1", "p50 C: the plain bank wording, got '%s'" % str(ui._trade_ratio_btn.text))
+	var snap_c := _p50_snap(_p50_compose_pairs(ui))
+	_p50_row_invariants(ui, "p50 C", _p50_compose_pairs(ui), "compose row", 3)
+	_p50_row_fit(ui, "p50 C")
+	# P: the 2:1 port wording: 2 Timber for 1 Grain over the owned Timber port.
+	_ui_real_click(ui._trade_clear_btn)
+	await _ui_settle(2)
+	await _p50_click_give(ui, TIMBER, 2)
+	await _p50_click_get(ui, GRAIN)
+	await _ui_settle(2)
+	_assert(bool(ui._trade_ratio_btn.is_visible_in_tree()), "p50 P: the 2:1 swap shows the bank button")
+	_assert(str(ui._trade_ratio_btn.text) == "Port 2:1", "p50 P: the port wording, got '%s'" % str(ui._trade_ratio_btn.text))
+	var snap_p := _p50_snap(_p50_compose_pairs(ui))
+	_p50_row_invariants(ui, "p50 P", _p50_compose_pairs(ui), "compose row", 3)
+	_p50_row_fit(ui, "p50 P")
+	# D: the longest bank label: 2 Timber (2:1 port) + 4 Clay (4:1) for 2 cards.
+	_ui_real_click(ui._trade_clear_btn)
+	await _ui_settle(2)
+	await _p50_click_give(ui, TIMBER, 2)
+	await _p50_click_give(ui, CLAY, 4)
+	await _p50_click_get(ui, GRAIN)
+	await _p50_click_get(ui, IRON)
+	await _ui_settle(2)
+	_assert(bool(ui._trade_ratio_btn.is_visible_in_tree()), "p50 D: the mixed selection shows the bank button")
+	_assert(str(ui._trade_ratio_btn.text) == "Bank / Port", "p50 D: the mixed wording, got '%s'" % str(ui._trade_ratio_btn.text))
+	var snap_d := _p50_snap(_p50_compose_pairs(ui))
+	_p50_row_invariants(ui, "p50 D", _p50_compose_pairs(ui), "compose row", 3)
+	_p50_row_fit(ui, "p50 D")
+	# E: back to the B selection.
+	_ui_real_click(ui._trade_clear_btn)
+	await _ui_settle(2)
+	await _p50_click_give(ui, CLAY, 1)
+	await _p50_click_get(ui, GRAIN)
+	await _ui_settle(2)
+	_assert(not bool(ui._trade_ratio_btn.is_visible_in_tree()), "p50 E: the bank button is hidden again")
+	var snap_e := _p50_snap(_p50_compose_pairs(ui))
+	_p50_row_invariants(ui, "p50 E", _p50_compose_pairs(ui), "compose row", 2)
+	_p50_row_fit(ui, "p50 E")
+	# p50c: the drafting label is the short token with the old sentence as tooltip.
+	var offers_now := int(s.state.open_trades_this_turn)
+	_assert(ui._trade_offers_lbl.mouse_filter != Control.MOUSE_FILTER_IGNORE,
+		"p50 label: the offers label takes the mouse so its tooltip can show")
+	_assert(str(ui._trade_offers_lbl.text) == "Offers %d/%d" % [offers_now, RulesEngine.MAX_OPEN_TRADES_PER_TURN],
+		"p50 label: the drafting label is the short count, got '%s'" % str(ui._trade_offers_lbl.text))
+	_assert(str(ui._trade_offers_lbl.tooltip_text) == "Offers this turn: %d of %d" % [
+		offers_now, RulesEngine.MAX_OPEN_TRADES_PER_TURN,
+	], "p50 label: the full sentence sits in the tooltip, got '%s'" % str(ui._trade_offers_lbl.tooltip_text))
+	var compose_snaps := {"A": snap_a, "B": snap_b, "C": snap_c, "P": snap_p, "D": snap_d, "E": snap_e}
+	_p50_compare_compose("p50 compose", compose_snaps, ["Ask players", "Clear", "Bank button", "Send new offer"])
+
+	# F: an AI offer answered out of turn, reached straight after state B...
+	_p47_arm_ai_offer(ui, 1, 1)
+	await _ui_settle(2)
+	s.step_ai()
+	await _ui_settle(4)
+	_assert(not s.state.open_trade.is_empty() and int(s.state.open_trade.get("from", -1)) == 1, "p50 F: Dune's offer is open")
+	var snap_f := _p50_snap(_p50_answer_pairs(ui))
+	_p50_row_invariants(ui, "p50 F", _p50_answer_pairs(ui), "answer row", 3)
+	_assert(not bool(ui._ot_accept_btn.disabled), "p50 F: the human holds the Iron, so Accept is enabled")
+	# F2: the same offer with one AI answer already recorded, which repaints the
+	# waiting row and so re-lays the tray out under the still-open answer buttons.
+	s.step_ai()
+	await _ui_settle(3)
+	var f2_resp: Dictionary = s.state.open_trade.get("responses", {})
+	_assert(f2_resp.size() >= 1,
+		"p50 F2: at least one AI has answered the offer the human is still looking at, got %s" % str(f2_resp.keys()))
+	var snap_f2 := _p50_snap(_p50_answer_pairs(ui))
+	_p50_row_invariants(ui, "p50 F2", _p50_answer_pairs(ui), "answer row", 3)
+	await _p50_decline_and_close(ui)
+
+	# ... G: the very same offer, reached after the bank button had been showing.
+	var back_at_human := _ui_drive_until(ui, func(st2: GameState) -> bool:
+		return not s.is_ai_to_act() and st2.current_player == 0 and st2.phase == GameTypes.TurnPhase.TURN_MAIN and st2.open_trade.is_empty()
+	)
+	_assert(back_at_human, "p50 G: the human's main phase is reachable again after the first offer")
+	ui._ot_result_active = false
+	await _p50_hand(ui, {TIMBER: 6, CLAY: 8, GRAIN: 4})
+	if not bool(ui._trade_tray.visible):
+		ui._toggle_trade_tray()
+	await _ui_settle(2)
+	await _p50_click_give(ui, CLAY, 4)
+	await _p50_click_get(ui, GRAIN)
+	await _ui_settle(2)
+	_assert(bool(ui._trade_ratio_btn.is_visible_in_tree()), "p50 G: the bank button was showing before the offer arrived")
+	_p47_arm_ai_offer(ui, 1, 1)
+	await _ui_settle(2)
+	s.step_ai()
+	await _ui_settle(4)
+	var snap_g := _p50_snap(_p50_answer_pairs(ui))
+	_p50_row_invariants(ui, "p50 G", _p50_answer_pairs(ui), "answer row", 3)
+	_assert(not bool(ui._ot_accept_btn.disabled), "p50 G: Accept is enabled here too")
+	await _p50_decline_and_close(ui)
+
+	# H: an offer the human cannot afford, then one it can.
+	_p47_arm_ai_offer(ui, 1, 0)
+	await _ui_settle(2)
+	s.step_ai()
+	await _ui_settle(4)
+	var snap_h1 := _p50_snap(_p50_answer_pairs(ui))
+	_p50_row_invariants(ui, "p50 H1", _p50_answer_pairs(ui), "answer row", 3)
+	_assert(bool(ui._ot_accept_btn.disabled), "p50 H1: without the Iron Accept is disabled")
+	await _p50_decline_and_close(ui)
+	_p47_arm_ai_offer(ui, 1, 1)
+	await _ui_settle(2)
+	s.step_ai()
+	await _ui_settle(4)
+	var snap_h2 := _p50_snap(_p50_answer_pairs(ui))
+	_p50_row_invariants(ui, "p50 H2", _p50_answer_pairs(ui), "answer row", 3)
+	_assert(not bool(ui._ot_accept_btn.disabled), "p50 H2: with the Iron Accept is enabled")
+	await _p50_decline_and_close(ui)
+	# I: the same three buttons over a wider offer band.
+	await _p50_wide_offer(ui)
+	_assert(not s.state.open_trade.is_empty() and int(s.state.open_trade.get("from", -1)) == 1, "p50 I: the wide offer is the open one")
+	var snap_i := _p50_snap(_p50_answer_pairs(ui))
+	_p50_row_invariants(ui, "p50 I", _p50_answer_pairs(ui), "answer row", 3)
+	_assert(not bool(ui._ot_accept_btn.disabled), "p50 I: the human holds the Iron the wide offer wants")
+	await _p50_decline_and_close(ui)
+	var answer_snaps := {"F": snap_f, "F2": snap_f2, "G": snap_g, "H1": snap_h1, "H2": snap_h2, "I": snap_i}
+	_p50_compare_answers("p50 answer", answer_snaps)
+
+	# CAP: all three offers used. The label falls back to the full sentence, so the
+	# row wraps - p50c must not make that tray worse than it already was. Measured
+	# before the change at 1280x800: the row is 304x31 with nothing drafted and
+	# 304x65 with the bank button showing, no vertical scrollbar either time, and
+	# the buttons stay inside the tray and the window.
+	# The answer flow ends mid AI turn, and the tray closes while the human is out
+	# of the loop, so hand the turn back before setting up the cap.
+	var back_at_human2 := _ui_drive_until(ui, func(st3: GameState) -> bool:
+		return not s.is_ai_to_act() and st3.current_player == 0 and st3.phase == GameTypes.TurnPhase.TURN_MAIN and st3.open_trade.is_empty()
+	)
+	_assert(back_at_human2, "p50 cap: the human's main phase is reachable again for the cap check")
+	ui._ot_result_active = false
+	if not bool(ui._trade_tray.is_visible_in_tree()):
+		ui._toggle_trade_tray()
+	await _ui_settle(2)
+	ui._reset_trade_counts()
+	# The answer phase zeroed the hands, so hand out fresh cards for the drafting.
+	await _p50_hand(ui, {TIMBER: 6, CLAY: 8, GRAIN: 4})
+	s.state.open_trades_this_turn = RulesEngine.MAX_OPEN_TRADES_PER_TURN
+	ui._refresh_ui()
+	await _ui_settle(2)
+	_assert(str(ui._trade_offers_lbl.text) == "No player offers left this turn (3 of 3). Bank and port trades still work.",
+		"p50 cap: the cap sentence keeps its full text, got '%s'" % str(ui._trade_offers_lbl.text))
+	_p50_row_invariants(ui, "p50 cap", _p50_compose_pairs(ui), "compose row", 2)
+	_p50_inside_window(ui, "p50 cap", _p50_snap(_p50_compose_pairs(ui)))
+	var cap_row_1: Rect2 = ui._trade_btn_row.get_global_rect()
+	_assert(cap_row_1.size.y <= 31.5, "p50 cap: the cap row keeps its pre-change height (31 px before, got %.1f px)" % cap_row_1.size.y)
+	_assert(not ui._trade_scroll.get_v_scroll_bar().visible, "p50 cap: the tray body does not scroll at the cap")
+	var snap_cap1 := _p50_snap(_p50_compose_pairs(ui))
+	for cap_key in snap_cap1.keys():
+		var cap_r1: Rect2 = snap_cap1[cap_key]
+		_assert(absf(cap_r1.size.y - 24.0) <= 0.5,
+			"p50 cap: the '%s' button stays 24 px high in the wrapped row, got %.1f px" % [str(cap_key), cap_r1.size.y])
+	# With the bank button showing as well: 4 Clay for 1 Grain at the cap.
+	await _p50_click_give(ui, CLAY, 4)
+	await _p50_click_get(ui, GRAIN)
+	await _ui_settle(2)
+	_assert(bool(ui._trade_ratio_btn.is_visible_in_tree()), "p50 cap bank: the bank button still shows at the cap")
+	_p50_row_invariants(ui, "p50 cap bank", _p50_compose_pairs(ui), "compose row", 3)
+	var snap_cap2 := _p50_snap(_p50_compose_pairs(ui))
+	_p50_inside_window(ui, "p50 cap bank", snap_cap2)
+	var cap_row_2: Rect2 = ui._trade_btn_row.get_global_rect()
+	_assert(cap_row_2.size.y <= 65.5, "p50 cap bank: the cap row keeps its pre-change height (65 px before, got %.1f px)" % cap_row_2.size.y)
+	_assert(not ui._trade_scroll.get_v_scroll_bar().visible, "p50 cap bank: the tray body does not scroll either")
+	for cap_key in ["Ask players", "Clear"]:
+		_p50_same("p50 cap bank", str(cap_key), snap_cap1, snap_cap2, "cap", "cap bank", false)
+		if not snap_cap2.has(cap_key):
+			continue
+		var cap_r2: Rect2 = snap_cap2[cap_key]
+		_assert(absf(cap_r2.size.y - 24.0) <= 0.5,
+			"p50 cap bank: the '%s' button stays 24 px high in the wrapped row, got %.1f px" % [str(cap_key), cap_r2.size.y])
+	s.state.open_trades_this_turn = 0
+	ui._refresh_ui()
+	ui.trade_pace_override = -1.0
+	root.size = Vector2i(64, 64)
+	_pass_section("153. p50 Trade Buttons Steady Test (Accept/Decline/Counter keep their exact rects across six offers - before and after an AI answers the same offer, after a compose state and after a plain one, with Accept disabled and enabled, over a one-card and a four-card band; the compose row keeps every button's x, width and height identical across all six drafting states and the bank button keeps that rect for all three of its labels while the row stays one 24 px line, the drafting label is the short count with the full sentence as tooltip, and the offer-cap tray keeps its pre-change shape with 24 px buttons; no button is zero-sized, outside the tray or window or overlapping its neighbour)")
