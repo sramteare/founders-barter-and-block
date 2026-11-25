@@ -5529,7 +5529,10 @@ func _rebuild_trade_chip_rows(unlocked: bool) -> void:
 		var sel: int = int(_trade_get_counts.get(r, 0))
 		face.selected = sel > 0
 		face.count = sel
-		face.count_badge = sel > 0
+		# p51: the badge headroom is reserved whether or not this face has a count,
+		# so all five get cards in the row share one drawn frame; the badge itself
+		# is only drawn when count > 0 (CardFace._draw_badges).
+		face.count_badge = true
 		face.disabled = not unlocked
 		face.tooltip_text = "Tap the card to add one \u2014 tap the count to remove one"
 
