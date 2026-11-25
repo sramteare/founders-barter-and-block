@@ -30,6 +30,7 @@ var _ro_pools: Dictionary = {}
 var _ro_none_labels: Dictionary = {}
 var _give_chip_pool: Array[CardFace] = []
 var _partner_rebuild_key := ""
+var _partner_rebuild_deferred := false
 var _strip_rebuild_key := ""
 var _chip_hover_texts: Dictionary = {}
 var _banner_hover_active := false
@@ -3733,6 +3734,8 @@ func _compute_instruction(state: GameState, acting_id: int, human_acting: bool) 
 		var ot_from0: int = int(state.open_trade.get("from", -1))
 		if not human_acting and ot_from0 == _view_pid():
 			return "Waiting for answers to your offer…"
+		if _early_answer_pid() >= 0:
+			return "%s wants to trade — accept, decline or counter." % _seat_display_name(ot_from0)
 	if not human_acting:
 		return "%s is thinking…" % _seat_display_name(acting_id)
 	if not state.open_trade.is_empty():
@@ -4303,7 +4306,7 @@ func _refresh_ui() -> void:
 
 	_refresh_offer_strip(state)
 	_refresh_trade_tray(state, acting_id, human_acting)
-	if not state.open_trade.is_empty() and bar_human:
+	if not state.open_trade.is_empty() and (bar_human or _early_answer_pid() >= 0):
 		if _board_view.interaction_mode == BoardView.InteractionMode.NONE and not _pending_guard_card:
 			_set_banner(_compute_instruction(state, acting_id, human_acting))
 
@@ -5584,6 +5587,36 @@ func _trade_revise_pid_calc() -> int:
 		return -1
 	return my_pid
 
+# p47: in a single-human game the human may answer an AI's offer right away,
+# before the paced AI answer wave reaches them. Returns the human's pid in
+# that state, -1 otherwise. Hot-seat games keep the old watch-only behaviour.
+func _early_answer_pid() -> int:
+	if _review_active:
+		return -1
+	if session == null or session.state == null:
+		return -1
+	if _human_seat_count() != 1:
+		return -1
+	var st: GameState = session.state
+	var ot: Dictionary = st.open_trade
+	if ot.is_empty():
+		return -1
+	var my_pid := _view_pid()
+	if my_pid < 0 or my_pid >= st.num_players or my_pid >= session.seats.size():
+		return -1
+	if session.seats[my_pid].is_ai():
+		return -1
+	if int(ot.get("from", -1)) == my_pid:
+		return -1
+	if _is_human_acting():
+		return -1
+	if _hand_hidden():
+		return -1
+	var responses: Dictionary = ot.get("responses", {})
+	if responses.has(my_pid):
+		return -1
+	return my_pid
+
 func _ot_awaits_view() -> bool:
 	if session == null or session.state == null:
 		return false
@@ -5591,6 +5624,8 @@ func _ot_awaits_view() -> bool:
 	var ot: Dictionary = st.open_trade
 	if ot.is_empty():
 		return false
+	if _early_answer_pid() >= 0:
+		return true
 	if not _is_human_acting():
 		return false
 	if int(ot.get("from", -1)) == _view_pid():
@@ -5664,7 +5699,11 @@ func _trade_allowed_now() -> bool:
 	if session == null or session.state == null:
 		return false
 	var st := session.state
-	if st.phase == GameTypes.TurnPhase.GAME_OVER or not _is_human_acting():
+	if st.phase == GameTypes.TurnPhase.GAME_OVER:
+		return false
+	if _early_answer_pid() >= 0:
+		return true
+	if not _is_human_acting():
 		return false
 	if st.phase == GameTypes.TurnPhase.TURN_MAIN:
 		return true
@@ -5719,7 +5758,10 @@ func _close_trade_tray_by_user() -> void:
 			_trade_counter_mode = false
 			return
 	if _ot_awaits_view():
-		session.submit_action(session.get_acting_player_id(), GameAction.respond_open_trade("decline"))
+		var answer_pid := _early_answer_pid()
+		if answer_pid < 0:
+			answer_pid = session.get_acting_player_id()
+		session.submit_action(answer_pid, GameAction.respond_open_trade("decline"))
 		_set_tray_panel_visible(false)
 		_release_tray_focus()
 		_trade_counter_mode = false
@@ -6099,12 +6141,17 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 	var from_p := int(ot.get("from", -1))
 	var my_pid := _view_pid()
 	var from_me_show := ot_open and from_p == my_pid
-	var respond := ot_open and human_acting and from_p != acting_id
+	# p47: a single human may answer an AI's offer out of turn, before the
+	# paced AI answer wave reaches them. `answer_pid` is the seat the answer
+	# buttons submit for; `watch` stays false so the tray shows answer mode.
+	var early_pid := _early_answer_pid()
+	var respond := (ot_open and human_acting and from_p != acting_id) or early_pid >= 0
+	var answer_pid := early_pid if early_pid >= 0 else acting_id
 
 	# The tray is the viewed human's workspace. When they are neither the
 	# proposer nor the acting responder they watch the negotiation read-only:
 	# a new offer opens the panel once (a dismissal sticks for that offer).
-	var watch := ot_open and from_p != my_pid and acting_id != my_pid
+	var watch := ot_open and from_p != my_pid and acting_id != my_pid and early_pid < 0
 	if ot_open and watch and not _trade_tray.visible and not _hand_hidden():
 		if _trade_reopen_token != _ot_dismiss_key(ot, my_pid):
 			_set_tray_panel_visible(true)
@@ -6133,19 +6180,19 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 	# close is remembered per (offer, seat), but never silences the proposer
 	# once every answer is in; a close at that stage keeps the Trade button
 	# pulsing and the banner points at it.
-	if ot_open and human_acting:
+	if ot_open and (human_acting or early_pid >= 0):
 		if from_me:
 			_trade_reopen_token = ""
 			_set_trade_hint(false)
 			_set_tray_panel_visible(true)
-		elif (respond and acting_id == my_pid and (ot.get("responses", {}) as Dictionary).is_empty()) or _trade_reopen_token != _ot_dismiss_key(ot, my_pid):
+		elif (respond and answer_pid == my_pid and (ot.get("responses", {}) as Dictionary).is_empty()) or _trade_reopen_token != _ot_dismiss_key(ot, my_pid):
 			var was_tray_open := _trade_tray.visible
-			if respond and acting_id == my_pid and (ot.get("responses", {}) as Dictionary).is_empty():
+			if respond and answer_pid == my_pid and (ot.get("responses", {}) as Dictionary).is_empty():
 				_trade_reopen_token = ""
 			_set_tray_panel_visible(true)
 			if respond and not was_tray_open:
 				_trade_opened_auto = true
-	if respond and not _trade_tray.visible and acting_id == my_pid:
+	if respond and not _trade_tray.visible and answer_pid == my_pid:
 		_set_trade_hint(true)
 
 	_trade_revise_pid = _trade_revise_pid_calc()
@@ -6178,7 +6225,7 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 		]
 	_trade_title_lbl.text = title
 	if _trade_close_btn != null:
-		if respond and acting_id == my_pid:
+		if respond and answer_pid == my_pid:
 			_trade_close_btn.tooltip_text = "Decline and close (Esc)"
 		elif from_me_show:
 			_trade_close_btn.tooltip_text = "Close (Esc) \u2014 withdraws your offer"
@@ -6187,7 +6234,7 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 
 	_trade_respond_view.visible = (respond or revise) and (not counter)
 	if (respond or revise) and (not counter):
-		var band_pid: int = acting_id if respond else _trade_revise_pid
+		var band_pid: int = answer_pid if respond else _trade_revise_pid
 		_fill_ro_row(_trade_ro_get_box, ot.get("offer", {}), {})
 		_fill_ro_row(_trade_ro_give_box, ot.get("request", {}), _missing_for_bundle(state, ot.get("request", {})))
 		var have_parts: Array[String] = []
@@ -6280,7 +6327,7 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 	_ot_back_btn.visible = counter
 	_ot_send_btn.disabled = not (give_total > 0 and get_total > 0)
 	if (respond or revise) and not counter:
-		var gate_pid: int = acting_id if respond else _trade_revise_pid
+		var gate_pid: int = answer_pid if respond else _trade_revise_pid
 		var limit_hit: bool = revise and revise_left <= 0
 		if limit_hit:
 			for b in [_ot_accept_btn, _ot_decline_btn, _ot_counter_btn]:
@@ -6362,7 +6409,17 @@ func _rebuild_partner_cards(state: GameState, ot: Dictionary, ot_open: bool, hum
 		key_parts.append("%d:%s#%d!%d" % [p, str(resp.get("status", "")), int(pticks.get(p, 0)), int(prv.get(p, 0))])
 	var key2 := "|".join(key_parts)
 	if key2 == _partner_rebuild_key:
+		_partner_rebuild_deferred = false
 		return
+	# p46: a partner response landing between press and release used to free
+	# the counter card under the held pointer (queue_free below), so the click
+	# was swallowed and the decline needed a second try. A button in the stack
+	# holding a live press keeps the old cards up; _process flushes the
+	# rebuild once the pointer is released.
+	if _partner_stack_press_held():
+		_partner_rebuild_deferred = true
+		return
+	_partner_rebuild_deferred = false
 	_partner_rebuild_key = key2
 	for c in _trade_partner_stack.get_children():
 		c.queue_free()
@@ -6459,6 +6516,32 @@ func _counter_phrase(resp: Dictionary) -> String:
 		_format_resource_bundle(resp.get("request", {})),
 		_format_resource_bundle(resp.get("offer", {})),
 	]
+
+func _partner_stack_press_held() -> bool:
+	if _trade_partner_stack == null or not is_instance_valid(_trade_partner_stack):
+		return false
+	return _node_subtree_press_held(_trade_partner_stack)
+
+func _flush_partner_rebuild() -> void:
+	if not _partner_rebuild_deferred:
+		return
+	if session == null or session.state == null or session.state.open_trade.is_empty():
+		_partner_rebuild_deferred = false
+		return
+	if _trade_partner_stack == null or not is_instance_valid(_trade_partner_stack) or not _trade_partner_stack.visible:
+		_partner_rebuild_deferred = false
+		return
+	if _partner_stack_press_held():
+		return
+	_refresh_trade_tray(session.state, session.get_acting_player_id(), _is_human_acting())
+
+func _node_subtree_press_held(node: Node) -> bool:
+	for child in node.get_children():
+		if child is BaseButton and (child as BaseButton).is_pressed():
+			return true
+		if _node_subtree_press_held(child):
+			return true
+	return false
 
 func _ot_begin_trade_result(ev: String) -> void:
 	_ot_snap_token = ""
@@ -7107,10 +7190,18 @@ func _on_bank_trade_pressed() -> void:
 	_reset_trade_counts()
 
 func _on_accept_offer_pressed() -> void:
-	_submit_human_action(GameAction.respond_open_trade("accept"), _trade_revise_pid)
+	var answer_pid := _early_answer_pid()
+	_submit_human_action(
+		GameAction.respond_open_trade("accept"),
+		answer_pid if answer_pid >= 0 else _trade_revise_pid
+	)
 
 func _on_decline_offer_pressed() -> void:
-	_submit_human_action(GameAction.respond_open_trade("decline"), _trade_revise_pid)
+	var answer_pid := _early_answer_pid()
+	_submit_human_action(
+		GameAction.respond_open_trade("decline"),
+		answer_pid if answer_pid >= 0 else _trade_revise_pid
+	)
 
 func _on_counter_offer_pressed() -> void:
 	if session == null or session.state == null:
@@ -7118,7 +7209,11 @@ func _on_counter_offer_pressed() -> void:
 	_trade_counter_mode = true
 	_reset_trade_counts()
 	var ot: Dictionary = session.state.open_trade
-	var answer_pid: int = _trade_revise_pid if _trade_revise_pid >= 0 else session.get_acting_player_id()
+	var early_pid := _early_answer_pid()
+	var answer_pid: int = (
+		early_pid if early_pid >= 0
+		else (_trade_revise_pid if _trade_revise_pid >= 0 else session.get_acting_player_id())
+	)
 	var hand: Dictionary = session.state.players[answer_pid].get("hand", {})
 	for r in GameTypes.ALL_RESOURCES:
 		var want_amt: int = clampi(int(ot.get("request", {}).get(r, 0)), 0, int(hand.get(r, 0)))
@@ -7132,13 +7227,14 @@ func _on_send_counter_pressed() -> void:
 		return
 	if _trade_side_total(_trade_give_counts) <= 0 or _trade_side_total(_trade_get_counts) <= 0:
 		return
+	var early_pid := _early_answer_pid()
 	_submit_human_action(
 		GameAction.respond_open_trade(
 			"counter",
 			_trade_get_counts.duplicate(),
 			_trade_give_counts.duplicate()
 		),
-		_trade_revise_pid
+		early_pid if early_pid >= 0 else _trade_revise_pid
 	)
 
 func _on_counter_back_pressed() -> void:
@@ -7147,7 +7243,7 @@ func _on_counter_back_pressed() -> void:
 	_refresh_trade_tray(session.state, session.get_acting_player_id(), _is_human_acting())
 
 func _hand_res_cursor(state: GameState, held: int, hand_hidden: bool) -> int:
-	if hand_hidden or not _is_human_acting():
+	if hand_hidden or (not _is_human_acting() and _early_answer_pid() < 0):
 		return Control.CURSOR_ARROW
 	if state.phase == GameTypes.TurnPhase.TURN_DISCARD:
 		return Control.CURSOR_POINTING_HAND
@@ -7160,7 +7256,7 @@ func _hand_card_tooltip(state: GameState, res: int, hand_hidden: bool, held: int
 		return "Hand is hidden"
 	if state.phase == GameTypes.TurnPhase.TURN_DISCARD:
 		return "Click to pick a card to discard"
-	if not _is_human_acting():
+	if not _is_human_acting() and _early_answer_pid() < 0:
 		return "Not your turn"
 	if state.phase == GameTypes.TurnPhase.TURN_ROLL:
 		return "Roll first"
@@ -7185,7 +7281,7 @@ func _on_resource_card_pressed(res: int) -> void:
 		_discard_pick_one(res)
 		return
 	if not st.open_trade.is_empty():
-		if not _is_human_acting() and not _own_offer_takeover():
+		if not _is_human_acting() and not _own_offer_takeover() and _early_answer_pid() < 0:
 			return
 		var from_now := int(st.open_trade.get("from", -1))
 		if from_now != session.get_acting_player_id() and from_now != _view_pid():
@@ -8303,6 +8399,7 @@ func _process(delta: float) -> void:
 	if _sb_focus_overlay != null and _sb_focus_overlay.visible:
 		_update_scoreboard_focus_overlay()
 	_trade_watch_pacing()
+	_flush_partner_rebuild()
 	_tick_rev_pulse(delta)
 	_review_tick(delta)
 	_update_fps_cap(delta)

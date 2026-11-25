@@ -351,6 +351,7 @@ const SHARD_WEIGHT_SECONDS := {
 	"_test_toast_tween_body": 1.2,  # 47
 	"_test_replay_engine": 1.1,  # 112
 	"_test_sidebar_no_vscroll_body": 1.0,  # 120
+	"_test_p47_early_trade_answer_body": 1.3,  # 150
 }
 
 func _runner_ui_test_bodies() -> Dictionary:
@@ -1577,6 +1578,17 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
 		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
 	], _test_p43_hand_flight_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	], _test_p46_counter_decline_midpress_rebuild_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_p47_early_trade_answer_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -12662,3 +12674,254 @@ func _p43r_step_until_flights(ui: Node, want: int) -> Dictionary:
 		await process_frame
 	out["seen"] = seen
 	return out
+
+func _test_p46_counter_decline_midpress_rebuild_body(ui: Node) -> void:
+	ui.auto_ai = false
+	root.size = Vector2i(1280, 800)
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	]
+	ui.session.start_match(779046, seats, true, 0)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var st: GameState = ui.session.state
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = 0
+	st.players[0]["hand"][GameTypes.ResourceType.TIMBER] = 2
+	st.players[1]["hand"][GameTypes.ResourceType.GRAIN] = 2
+	st.players[2]["hand"][GameTypes.ResourceType.GRAIN] = 2
+	ui._refresh_ui()
+	ui._toggle_trade_tray()
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.TIMBER: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	ui.session.submit_action(1, GameAction.respond_open_trade("counter", {GameTypes.ResourceType.IRON: 2}, {GameTypes.ResourceType.GRAIN: 1}))
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	var decline_btn := _find_button_by_text(ui._trade_partner_stack, "Decline")
+	_assert(decline_btn != null and decline_btn.is_visible_in_tree(), "Counter card carries a clickable Decline button")
+	# hold a real mouse press on the card's Decline ...
+	var down_seen: Array[bool] = [false]
+	decline_btn.button_down.connect(func() -> void: down_seen[0] = true)
+	var center := root.get_screen_transform() * (decline_btn.get_global_transform() * (decline_btn.size * 0.5))
+	var mv := InputEventMouseMotion.new()
+	mv.position = center
+	mv.global_position = center
+	root.push_input(mv)
+	var press_ev := InputEventMouseButton.new()
+	press_ev.button_index = MOUSE_BUTTON_LEFT
+	press_ev.pressed = true
+	press_ev.position = center
+	press_ev.global_position = center
+	root.push_input(press_ev)
+	await ui.get_tree().process_frame
+	_assert(down_seen[0], "The real press lands on the card's Decline")
+	# ... while the second bot answers, which rebuilds every partner card mid-press
+	ui.session.submit_action(2, GameAction.respond_open_trade("decline"))
+	ui._refresh_ui()
+	await ui.get_tree().process_frame
+	_assert(is_instance_valid(decline_btn) and decline_btn.is_visible_in_tree(), "The held Decline button survives the mid-press partner rebuild")
+	var rel_ev := InputEventMouseButton.new()
+	rel_ev.button_index = MOUSE_BUTTON_LEFT
+	rel_ev.pressed = false
+	rel_ev.position = center
+	rel_ev.global_position = center
+	root.push_input(rel_ev)
+	await ui.get_tree().process_frame
+	_assert(bool(ui._declined_counters.get(1, false)), "The held press still registers the counter decline through the rebuild")
+	await ui.get_tree().process_frame
+	_assert(_find_label_containing(ui._trade_partner_stack, "✗ Counter declined"), "The deferred partner rebuild paints the declined card after release")
+	ui.session.submit_action(0, GameAction.cancel_open_trade())
+	ui._ot_result_active = false
+	await ui.get_tree().process_frame
+	if not bool(ui._trade_tray.visible):
+		ui._toggle_trade_tray()
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	# a plain (unheld across rebuilds) click still registers on a fresh counter
+	st.open_trades_this_turn = 0
+	st.players[0]["hand"][GameTypes.ResourceType.GRAIN] = 3
+	ui.session.submit_action(0, GameAction.open_trade({GameTypes.ResourceType.TIMBER: 1}, {GameTypes.ResourceType.GRAIN: 1}))
+	ui.session.submit_action(1, GameAction.respond_open_trade("counter", {GameTypes.ResourceType.IRON: 2}, {GameTypes.ResourceType.GRAIN: 1}))
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	_assert(bool(ui._declined_counters.is_empty()), "A fresh offer clears the declined-counter state")
+	var decline_btn2 := _find_button_by_text(ui._trade_partner_stack, "Decline")
+	_assert(decline_btn2 != null and decline_btn2.is_visible_in_tree(), "Second counter card carries a clickable Decline button")
+	_ui_real_click(decline_btn2)
+	await ui.get_tree().process_frame
+	_assert(bool(ui._declined_counters.get(1, false)), "A plain click on the second counter card's Decline registers")
+	ui.session.submit_action(0, GameAction.cancel_open_trade())
+	await ui.get_tree().process_frame
+	_pass_section("149. Counter Decline Mid-Press Rebuild Test (a real press held on a counter card's Decline through a mid-press partner-card rebuild keeps its capture and registers, the deferred rebuild paints the declined card after release, and a plain click on a fresh counter card still registers)")
+
+# --- 150: p47 early trade answers in a one-human game ------------------------
+
+func _p47_zero_hands(st: GameState) -> void:
+	for pid in range(st.num_players):
+		for r in GameTypes.ALL_RESOURCES:
+			st.players[pid]["hand"][r] = 0
+		st.players[pid]["dev_cards"] = []
+		st.players[pid]["new_dev_cards"] = []
+		st.players[pid]["played_dev_this_turn"] = false
+
+# Arrange state only, then let the game's own AI loop post the offer.
+func _p47_arm_ai_offer(ui: Node, proposer: int, human_iron: int) -> void:
+	var st: GameState = ui.session.state
+	st.open_trade.clear()
+	st.phase = GameTypes.TurnPhase.TURN_MAIN
+	st.current_player = proposer
+	st.open_trades_this_turn = 0
+	_p47_zero_hands(st)
+	st.players[proposer]["hand"][GameTypes.ResourceType.GRAIN] = 2
+	st.players[proposer]["hand"][GameTypes.ResourceType.IRON] = 2
+	st.players[proposer]["hand"][GameTypes.ResourceType.TIMBER] = 3
+	st.players[proposer]["settlements_left"] = 0
+	st.players[proposer]["roads_left"] = 0
+	st.players[0]["hand"][GameTypes.ResourceType.IRON] = human_iron
+	ui._trade_tray.visible = false
+	ui._trade_respond_mode = false
+	ui._trade_counter_mode = false
+	ui._trade_reopen_token = ""
+	ui._trade_opened_auto = false
+	ui._reset_trade_counts()
+	ui._refresh_ui()
+
+func _p47_resolve_offer(ui: Node, max_steps: int = 80) -> bool:
+	var s = ui.session
+	var guard := 0
+	while not s.state.open_trade.is_empty() and guard < max_steps:
+		guard += 1
+		if not s.is_ai_to_act():
+			return false
+		s.step_ai()
+	return s.state.open_trade.is_empty()
+
+func _test_p47_early_trade_answer_body(ui: Node) -> void:
+	ui.auto_ai = false
+	ui.trade_pace_override = 0.0
+	root.size = Vector2i(1280, 800)
+	var s = ui.session
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	]
+	s.start_match(47047, seats, true, 0)
+	var reached := _ui_drive_until(ui, func(st: GameState) -> bool:
+		return not s.is_ai_to_act() and st.phase == GameTypes.TurnPhase.TURN_MAIN and st.open_trade.is_empty()
+	)
+	_assert(reached, "Reached the human's main phase for the early trade answer test")
+	if not reached:
+		root.size = Vector2i(64, 64)
+		return
+
+	# (1)+(2) The human is last in the answer order but may decline at once.
+	_p47_arm_ai_offer(ui, 1, 0)
+	s.step_ai()
+	var st: GameState = s.state
+	var ot1: Dictionary = st.open_trade
+	_assert(not ot1.is_empty() and int(ot1.get("from", -1)) == 1, "The game's AI loop posted Dune's offer")
+	var tok1: String = str(ui._ot_token(ot1))
+	_assert(s.get_acting_player_id() != 0, "Another AI is still acting when the human may answer")
+	_assert(not (ot1.get("responses", {}) as Dictionary).has(0), "The human has not answered this offer yet")
+	var early_ok := bool(ui._ot_decline_btn.is_visible_in_tree())
+	_assert(early_ok, "Early Decline is visible before the paced AI answers reach the human")
+	_assert(bool(ui._ot_accept_btn.is_visible_in_tree()), "Early Accept is visible")
+	_assert(bool(ui._ot_counter_btn.is_visible_in_tree()), "Early Counter is visible")
+	_assert(not bool(ui._ot_decline_btn.disabled), "Early Decline is enabled")
+	_assert(str(ui._status_banner_label.text).contains("wants to trade"), "The instruction asks the human to answer out of turn, got '%s'" % str(ui._status_banner_label.text))
+	await _ui_settle(2)
+	_assert(bool(ui._ot_decline_btn.is_visible_in_tree()) and not bool(ui._ot_decline_btn.disabled), "The early answer controls survive the layout frames")
+	if early_ok:
+		_ui_real_click(ui._ot_decline_btn)
+		await _ui_settle(2)
+		ot1 = s.state.open_trade
+		var r1: Dictionary = (ot1.get("responses", {}) as Dictionary).get(0, {})
+		_assert(str(r1.get("status", "")) == "decline", "The early Decline is recorded for human pid 0")
+		_assert(ui._ot_token(ot1) == tok1, "The human's decline belongs to the offer that was live")
+		_assert(s.get_acting_player_id() != 0, "At least one AI still has to answer after the human declined")
+		_assert(ui._trade_revise_pid == 0, "After the answer the existing revise mode takes over for the human")
+		_assert(_p47_resolve_offer(ui), "The AIs still answer and the declined offer closes normally")
+	else:
+		_p47_resolve_offer(ui)
+
+	# (4) The human accepts early; only the human holds the requested Iron.
+	_p47_arm_ai_offer(ui, 1, 1)
+	s.step_ai()
+	st = s.state
+	var ot2: Dictionary = st.open_trade
+	_assert(not ot2.is_empty() and int(ot2.get("from", -1)) == 1, "A second AI offer is open")
+	var early_ok2 := bool(ui._ot_accept_btn.is_visible_in_tree()) and not bool(ui._ot_accept_btn.disabled)
+	_assert(early_ok2, "Early Accept is visible and enabled while an AI is still acting")
+	var iron_before := int(st.players[0]["hand"].get(GameTypes.ResourceType.IRON, 0))
+	var timber_before := int(st.players[0]["hand"].get(GameTypes.ResourceType.TIMBER, 0))
+	await _ui_settle(2)
+	if early_ok2:
+		_ui_real_click(ui._ot_accept_btn)
+		await _ui_settle(2)
+		var r2: Dictionary = (s.state.open_trade.get("responses", {}) as Dictionary).get(0, {})
+		_assert(str(r2.get("status", "")) == "accept", "The early Accept is recorded for human pid 0")
+		_assert(_p47_resolve_offer(ui), "The AI proposer finalizes once every answer is in")
+		st = s.state
+		var iron_after := int(st.players[0]["hand"].get(GameTypes.ResourceType.IRON, 0))
+		var timber_after := int(st.players[0]["hand"].get(GameTypes.ResourceType.TIMBER, 0))
+		_assert(iron_after == iron_before - 1 and timber_after == timber_before + 1,
+			"The early accept still completed with the human: 1 Iron out, 1 Timber in (%d->%d Iron, %d->%d Timber)" % [iron_before, iron_after, timber_before, timber_after])
+	else:
+		_p47_resolve_offer(ui)
+
+	# (5) The human's early counter is recorded under the human pid.
+	_p47_arm_ai_offer(ui, 1, 2)
+	s.step_ai()
+	st = s.state
+	var ot3: Dictionary = st.open_trade
+	_assert(not ot3.is_empty() and int(ot3.get("from", -1)) == 1, "A third AI offer is open")
+	var tok3: String = str(ui._ot_token(ot3))
+	var early_ok3 := bool(ui._ot_counter_btn.is_visible_in_tree())
+	_assert(early_ok3, "Early Counter is visible while an AI is still acting")
+	await _ui_settle(2)
+	if early_ok3:
+		_ui_real_click(ui._ot_counter_btn)
+		await _ui_settle(2)
+		_assert(bool(ui._trade_counter_mode), "Counter mode engages out of turn")
+		_assert(bool(ui._ot_send_btn.is_visible_in_tree()) and not bool(ui._ot_send_btn.disabled), "Send counter is visible and enabled")
+		_ui_real_click(ui._ot_send_btn)
+		await _ui_settle(2)
+		var ot3b: Dictionary = s.state.open_trade
+		_assert(ui._ot_token(ot3b) == tok3, "The early counter belongs to the offer that was live")
+		var resp3: Dictionary = ot3b.get("responses", {})
+		_assert(resp3.has(0), "The early counter is recorded under the human pid 0, not an AI")
+		_assert(str((resp3.get(0, {}) as Dictionary).get("status", "")) == "counter", "The human's early answer is a counter")
+		_assert(not resp3.has(2) and not resp3.has(3), "No AI pid was given the human's counter")
+		_p47_resolve_offer(ui)
+
+	# (6) Hot-seat games (2 humans) keep the old watch-only behaviour.
+	var hs_seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.HUMAN, "Coral"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Pike"),
+	]
+	s.start_match(47048, hs_seats, true, 0)
+	var reached_hs := _ui_drive_until(ui, func(st2: GameState) -> bool:
+		return not s.is_ai_to_act() and st2.phase == GameTypes.TurnPhase.TURN_MAIN and st2.open_trade.is_empty()
+	)
+	_assert(reached_hs, "Reached a human main phase in the hot-seat game")
+	if reached_hs:
+		_p47_arm_ai_offer(ui, 2, 1)
+		s.step_ai()
+		st = s.state
+		_assert(not st.open_trade.is_empty() and int(st.open_trade.get("from", -1)) == 2, "An AI seat posts the offer in the hot-seat game")
+		_assert(s.get_acting_player_id() != 0 and s.get_acting_player_id() != 1, "An AI is still acting in the hot-seat game")
+		_assert(not bool(ui._ot_decline_btn.is_visible_in_tree()), "Hot-seat: no early Decline for the non-acting human")
+		_assert(not bool(ui._ot_accept_btn.is_visible_in_tree()), "Hot-seat: no early Accept")
+		_assert(not bool(ui._ot_counter_btn.is_visible_in_tree()), "Hot-seat: no early Counter")
+		_assert(not bool(ui._trade_respond_view.visible), "Hot-seat: the answer view stays closed")
+		_assert(not bool(ui._ot_awaits_view()), "Hot-seat: the offer does not await the viewed human yet")
+	ui.trade_pace_override = -1.0
+	root.size = Vector2i(64, 64)
+	_pass_section("150. Early Trade Answer Test (one-human games show Accept/Decline/Counter before the paced AI answers; early decline/accept/counter use the human pid and the offer still resolves; hot-seat keeps watch-only)")
