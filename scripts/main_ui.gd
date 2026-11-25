@@ -10,6 +10,8 @@ var _steal_victims: Array[int] = []
 const FPS_ACTIVE := 60
 const FPS_IDLE := 30
 const FPS_IDLE_AFTER_S := 2.0
+const CARD_FLIGHT_SECONDS := 0.7
+const STEAL_FLIGHT_SECONDS := 1.0
 const SCOREBOARD_ROW_SHADOW_SIZE := 1
 const SCOREBOARD_ROW_BORDER := 1
 
@@ -291,6 +293,12 @@ var _trade_ratio_btn: Button = null
 var _trade_resend_btn: Button = null
 var _trade_offers_lbl: Label = null
 var _trade_clear_btn: Button = null
+# p50c: the bank button's holder (see _make_tray_button_slot) and the measured
+# width it reserves while a plain offer is being drafted.
+var _trade_ratio_slot: MarginContainer = null
+var _trade_bank_slot_width := 0.0
+var _trade_bank_slot_reserve := false
+const TRADE_BANK_LABELS: Array[String] = ["Bank 4:1", "Port 2:1", "Port 3:1", "Bank / Port"]
 var _ot_accept_btn: Button = null
 var _ot_decline_btn: Button = null
 var _ot_counter_btn: Button = null
@@ -2853,7 +2861,7 @@ func _start_steal_anim(victim: int, thief: int, res: int, state: GameState) -> v
 		_res_hold[res] = -1
 	_refresh_ui()
 	_steal_pending_anim = {"victim": victim, "thief": thief, "res": res}
-	_steal_hold_deadline_ms = Time.get_ticks_msec() + int((_board_view.blocker_anim_duration() + 0.7 + 1.0) * 1000.0)
+	_steal_hold_deadline_ms = Time.get_ticks_msec() + int((_board_view.blocker_anim_duration() + STEAL_FLIGHT_SECONDS + 1.0) * 1000.0)
 	var delay_serial := _steal_anim_serial
 	var dur := _board_view.blocker_anim_duration()
 	if _blocker_anim_this_update and dur > 0.0:
@@ -2951,10 +2959,10 @@ func _hand_resource_group_center_ui() -> Vector2:
 
 func _spawn_steal_flyer(from: Vector2, to: Vector2, res_id: int, thief_pid: int, serial: int) -> void:
 	_last_fly_kind = "resource" if res_id >= 0 else "back"
-	_steal_flyer = _spawn_card_flyer(from, to, res_id, 0.0, func() -> void: _on_steal_card_landed(thief_pid, serial), 44.0)
+	_steal_flyer = _spawn_card_flyer(from, to, res_id, 0.0, func() -> void: _on_steal_card_landed(thief_pid, serial), 44.0, Color(0, 0, 0, 0), Callable(), -2, 0.0, STEAL_FLIGHT_SECONDS)
 
 
-func _spawn_card_flyer(from: Vector2, to: Vector2, res_id: int, delay: float, on_landed: Callable, px := 44.0, outline_col := Color(0, 0, 0, 0), to_live: Callable = Callable(), action_id := -2, hold_fade := 0.0) -> CardFace:
+func _spawn_card_flyer(from: Vector2, to: Vector2, res_id: int, delay: float, on_landed: Callable, px := 44.0, outline_col := Color(0, 0, 0, 0), to_live: Callable = Callable(), action_id := -2, hold_fade := 0.0, base_seconds := CARD_FLIGHT_SECONDS) -> CardFace:
 	var f := CardFace.new()
 	f.focusable = false
 	f.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2986,7 +2994,7 @@ func _spawn_card_flyer(from: Vector2, to: Vector2, res_id: int, delay: float, on
 		o.size = f.size
 		o.pivot_offset = f.size * 0.5
 		o.position = f.position
-	var dur := 0.7 * (0.45 if _settings_speed_idx >= 2 else 1.0)
+	var dur := base_seconds * (0.45 if _settings_speed_idx >= 2 else 1.0)
 	var arc_h := 46.0
 	var tw := f.create_tween()
 	if delay > 0.0:
@@ -5102,7 +5110,6 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_respond_row.add_theme_constant_override("separation", 6)
 	_trade_respond_view.add_child(_trade_respond_row)
 	_ot_accept_btn = _make_tray_button("Accept", "primary", "Accept this offer")
-	_ot_accept_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_ot_accept_btn.pressed.connect(_on_accept_offer_pressed)
 	_trade_respond_row.add_child(_ot_accept_btn)
 	_ot_decline_btn = _make_tray_button("Decline", "ghost", "Decline this offer")
@@ -5124,25 +5131,40 @@ func _build_trade_tray(parent_column: VBoxContainer) -> void:
 	_trade_btn_row.add_theme_constant_override("separation", 4)
 	_trade_left_col.add_child(_trade_btn_row)
 	_trade_ask_btn = _make_tray_button("Ask players", "primary", "Post this offer to every other player")
+	# p50c: a offers label that wraps makes the row taller; SHRINK_BEGIN keeps every
+	# button 24 px high at the row's top edge whatever the row's height.
+	_trade_ask_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_trade_ask_btn.pressed.connect(_on_ask_players_pressed)
 	_trade_btn_row.add_child(_trade_ask_btn)
 	_trade_resend_btn = _make_tray_button("Send new offer", "primary", "Cancel this offer and post the new one")
 	_trade_resend_btn.visible = false
+	_trade_resend_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_trade_resend_btn.pressed.connect(_on_resend_offer_pressed)
 	_trade_btn_row.add_child(_trade_resend_btn)
-	_trade_ratio_btn = _make_tray_button("Bank 4:1", "normal", "Swap these cards with the bank at this ratio")
-	_trade_ratio_btn.visible = false
-	_trade_ratio_btn.pressed.connect(_on_bank_trade_pressed)
-	_trade_btn_row.add_child(_trade_ratio_btn)
 	_trade_clear_btn = _make_tray_button("Clear", "ghost", "Reset both sides of the offer")
+	_trade_clear_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_trade_clear_btn.pressed.connect(_on_clear_trade_pressed)
 	_trade_btn_row.add_child(_trade_clear_btn)
+	_trade_ratio_btn = _make_tray_button("Bank 4:1", "normal", "Swap these cards with the bank at this ratio")
+	_trade_ratio_btn.visible = false
+	_trade_ratio_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_trade_ratio_btn.pressed.connect(_on_bank_trade_pressed)
+	# p50c: the bank button sits after Clear and, while a plain offer is drafted,
+	# lives in a slot that reserves its longest label's measured width, so Clear
+	# and the relabelling button never slide (see _set_bank_slot_reserve).
+	_trade_ratio_slot = _make_tray_button_slot(_trade_btn_row, [_trade_ratio_btn], TRADE_BANK_LABELS)
+	_trade_ratio_slot.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_trade_bank_slot_width = _trade_ratio_slot.custom_minimum_size.x
+	_trade_ratio_slot.custom_minimum_size = Vector2(0.0, 0.0)
 	_trade_offers_lbl = Label.new()
 	_trade_offers_lbl.add_theme_font_size_override("font_size", 10)
 	_trade_offers_lbl.add_theme_color_override("font_color", Palette.TEXT)
 	_trade_offers_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_trade_offers_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_trade_offers_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	# p50c: the normal offers text is the short "Offers 0/3" form, so the whole
+	# sentence lives in the tooltip and a Label must take the mouse to show it.
+	_trade_offers_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 	_trade_offers_lbl.visible = false
 	_trade_btn_row.add_child(_trade_offers_lbl)
 
@@ -5520,6 +5542,65 @@ func _make_tray_button(btn_text: String, kind: String, tip: String) -> Button:
 	_style_button(b, kind)
 	_flatten_trade_button(b)
 	return b
+
+# p50c: a fixed-width holder inside the compose row for the bank button, whose
+# label changes (Bank 4:1 / Port 2:1 / Port 3:1 / Bank / Port) and which shows and
+# hides with the drafted offer. The width is measured from the button itself,
+# never guessed; _set_bank_slot_reserve decides when the slot reserves it.
+func _make_tray_button_slot(parent_row: HBoxContainer, buttons: Array, labels: Array[String]) -> MarginContainer:
+	var slot := MarginContainer.new()
+	for m in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		slot.add_theme_constant_override(m, 0)
+	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent_row.add_child(slot)
+	for b in buttons:
+		slot.add_child(b as Control)
+	slot.custom_minimum_size = Vector2(_widest_button_text_width(buttons[0] as Button, labels), 0.0)
+	return slot
+
+# The widest minimum the button itself asks for across every label it can be given,
+# read at the font it really renders with (the caller keeps the buttons in the tree).
+func _widest_button_text_width(btn: Button, labels: Array[String]) -> float:
+	var keep := btn.text
+	var widest := 0.0
+	for t in labels:
+		btn.text = t
+		btn.update_minimum_size()
+		widest = maxf(widest, btn.get_combined_minimum_size().x)
+	btn.text = keep
+	btn.update_minimum_size()
+	return widest
+
+# p50c: the slot reserves the measured width only while a plain offer is being
+# drafted (propose_idle and the offer cap not hit); every other state keeps the
+# row exactly as before and shows the slot only together with its button, at the
+# button's own width. The reserve flag is remembered so a resize re-applies it.
+func _set_bank_slot_reserve(reserve: bool) -> void:
+	if _trade_ratio_slot == null or not is_instance_valid(_trade_ratio_slot):
+		return
+	if _trade_ratio_btn == null or not is_instance_valid(_trade_ratio_btn):
+		return
+	_trade_bank_slot_reserve = reserve
+	var want_w := _trade_bank_slot_width if reserve else 0.0
+	if not is_equal_approx(_trade_ratio_slot.custom_minimum_size.x, want_w):
+		_trade_ratio_slot.custom_minimum_size = Vector2(want_w, 0.0)
+	var want_vis := reserve or _trade_ratio_btn.visible
+	if _trade_ratio_slot.visible != want_vis:
+		_trade_ratio_slot.visible = want_vis
+
+# p50c: a window resize or a style switch changes the metrics the slot was
+# measured with, so the width is measured again when the tray is laid out.
+func _sync_compose_slot_widths() -> void:
+	if _trade_ratio_slot == null or not is_instance_valid(_trade_ratio_slot):
+		return
+	if _trade_ratio_btn == null or not is_instance_valid(_trade_ratio_btn):
+		return
+	var w := _widest_button_text_width(_trade_ratio_btn, TRADE_BANK_LABELS)
+	if is_equal_approx(w, _trade_bank_slot_width):
+		return
+	_trade_bank_slot_width = w
+	if _trade_bank_slot_reserve:
+		_trade_ratio_slot.custom_minimum_size = Vector2(w, 0.0)
 
 func _trade_dash_pid() -> int:
 	return _view_pid()
@@ -5978,6 +6059,8 @@ func _layout_trade_slot() -> void:
 	_trade_frame.size = _trade_slot.size - Vector2(0.0, 9.0)
 	_trade_tray.position = Vector2(8.0, -2.0)
 	_trade_tray.size = _trade_slot.size - Vector2(18.0, 15.0)
+	# p50c: the measured width of the bank slot follows the new metrics.
+	_sync_compose_slot_widths()
 
 func _layout_hand_overlay() -> void:
 	if _hand_overlay == null or _hand_bar_panel == null:
@@ -6304,6 +6387,8 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 			_trade_ratio_btn.text = "Port 2:1" if plan_ratios[0] == 2 else ("Port 3:1" if plan_ratios[0] == 3 else "Bank 4:1")
 		else:
 			_trade_ratio_btn.text = "Bank / Port"
+	# p50c: the slot holds its measured width only while a plain offer is drafted.
+	_set_bank_slot_reserve(propose_idle and not offer_cap_hit)
 	_trade_resend_btn.visible = editing_own_offer and not own_has_answer
 	if editing_own_offer:
 		var ot_key := "%s>%s" % [
@@ -6321,10 +6406,17 @@ func _refresh_trade_tray(state: GameState, acting_id: int, human_acting: bool) -
 			_trade_resend_btn.tooltip_text = "Cancel this offer and post the new one"
 	_trade_offers_lbl.visible = propose_idle or editing_own_offer
 	if _trade_offers_lbl.visible:
+		# p50c: the row has room for one short token, so the running count shows as
+		# "Offers 0/3" and the full sentence drops to the tooltip; the cap keeps the
+		# whole sentence as its warning and (as before) no tooltip.
 		if offer_cap_hit:
 			_trade_offers_lbl.text = "No player offers left this turn (3 of 3). Bank and port trades still work."
+			_trade_offers_lbl.tooltip_text = ""
 		else:
-			_trade_offers_lbl.text = "Offers this turn: %d of %d" % [
+			_trade_offers_lbl.text = "Offers %d/%d" % [
+				state.open_trades_this_turn, RulesEngine.MAX_OPEN_TRADES_PER_TURN
+			]
+			_trade_offers_lbl.tooltip_text = "Offers this turn: %d of %d" % [
 				state.open_trades_this_turn, RulesEngine.MAX_OPEN_TRADES_PER_TURN
 			]
 	_trade_clear_btn.disabled = (give_total == 0 and get_total == 0) or not (propose_idle or counter)
