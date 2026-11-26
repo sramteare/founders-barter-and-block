@@ -16,6 +16,7 @@ func _init() -> void:
 	var ui_script = load(UI_SCRIPT_PATH)
 	ui_script.settings_path = TEST_SETTINGS_PATH
 	ui_script.turn_min_seconds_override = 0.0
+	ui_script.win_sequence_override = 0.0
 	_run_plain(_test_topology)
 	_run_plain(_test_board_generator)
 	_run_plain(_test_setup_and_distance_rule)
@@ -232,6 +233,7 @@ func _finish_suite() -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS_PATH))
 	load(UI_SCRIPT_PATH).settings_path = "user://settings.cfg"
 	load(UI_SCRIPT_PATH).turn_min_seconds_override = -1.0
+	load(UI_SCRIPT_PATH).win_sequence_override = -1.0
 	print("======================================================")
 	_runner_print_timing()
 	print("Tests Passed: %d | Tests Failed: %d" % [_passed, _failed])
@@ -356,6 +358,10 @@ const SHARD_WEIGHT_SECONDS := {
 	"_test_p49_steal_flight_pace_body": 4.6,  # 152
 	"_test_p50_trade_buttons_steady_body": 2.2,  # 153
 	"_test_p51_trade_get_cards_same_height_body": 2.2,  # 154
+	"_test_win1_sequence_body": 3.5,  # 155
+	"_test_win2_spotlight_sound_body": 5.0,  # 156
+	"_test_win3_charters_confetti_body": 6.0,  # 157
+	"_test_win4_guards_sizing_body": 3.0,  # 158
 }
 
 func _runner_ui_test_bodies() -> Dictionary:
@@ -1617,6 +1623,27 @@ func _start_ui_tests() -> void:
 		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
 		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
 	], _test_p51_trade_get_cards_same_height_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	], _test_win1_sequence_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	], _test_win2_spotlight_sound_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_win3_charters_confetti_body)
+	_queue_ui_test([
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	], _test_win4_guards_sizing_body)
 
 func _test_live_revision_ui_body(ui: Node) -> void:
 	var s = ui.session
@@ -4252,9 +4279,9 @@ func _test_sfx_body(ui: Node) -> void:
 	var clips_ok := true
 	for nm in names:
 		var w: AudioStreamWAV = sfx._clips[nm]
-		if w.data.size() <= 0 or sfx.clip_length(str(nm)) >= 1.2:
+		if w.data.size() <= 0 or sfx.clip_length(str(nm)) >= 1.5:
 			clips_ok = false
-	_assert(clips_ok, "Every clip must have data and be shorter than 1.2 s")
+	_assert(clips_ok, "Every clip must have data and be shorter than 1.5 s")
 	var seats: Array[SeatConfig] = [
 		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
 		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
@@ -13858,3 +13885,780 @@ func _test_p51_trade_get_cards_same_height_body(ui: Node) -> void:
 	ui.trade_pace_override = -1.0
 	root.size = Vector2i(64, 64)
 	_pass_section("154. p51 Trade Get Cards Same Height Test (with 0, 1 and 2 get cards selected by real clicks, one of them at count 1 then 3, the five 'You get' faces draw identical card rects and a selection lifts a card by exactly 6 px with no size or x change; each selected card's count badge stays inside its face rect and the emblem art inside the drawn card; the visible give chips draw one shared size and x)")
+
+func _win1_splash_buttons(ui: Node) -> Array:
+	return [ui._splash_review_btn, ui._splash_save_btn, ui._splash_new_game_btn, ui._splash_lobby_btn, ui._splash_view_board_btn, ui._splash_quit_btn]
+
+# The "N VP" number currently printed in one row, or -1 when it is not a number.
+func _win1_vp_value(ui: Node, row_index: int) -> int:
+	var labels: Array = ui._win_vp_labels
+	if row_index < 0 or row_index >= labels.size():
+		return -1
+	var parts: Array = str((labels[row_index] as Label).text).split(" ")
+	if parts.is_empty() or not String(parts[0]).is_valid_int():
+		return -1
+	return int(parts[0])
+
+# Everything the results panel shows, as one string: title, turns line, every standings
+# row's labels and every results button's text, visibility and enabled state. The header
+# Results button is not part of it: showing the results from it has always left it up.
+func _win1_snapshot(ui: Node) -> String:
+	var out := "title=%s|turns=%s" % [str(ui._splash_title.text), str(ui._splash_turns.text)]
+	var rows: Array = ui._win_rows
+	for i in range(rows.size()):
+		out += "|row%d" % i
+		for c in (rows[i] as Control).get_children():
+			if c is Label:
+				out += "[%s]" % str((c as Label).text)
+	for b in _win1_splash_buttons(ui):
+		var btn := b as Button
+		out += "|%s:v=%s:d=%s" % [str(btn.text), str(bool(btn.is_visible_in_tree())), str(bool(btn.disabled))]
+	return out
+
+# Ends a fresh match the way the splash tests do: put the standings into the state and
+# push it through _on_state_updated. Azure (human, seat 0) wins with 2 VP, Dune (bot)
+# is last with 1 VP, nobody holds a Charter card. The settle first flushes the rows the
+# previous match queued free, so the new rows are the only ones in the panel.
+func _win1_end_match(ui: Node, seed_val: int) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+	]
+	ui._win_sequence_cancel()
+	if ui._splash_overlay != null:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	ui.session.start_match(seed_val, seats, true, 0)
+	await _ui_settle(1)
+	var st: GameState = ui.session.state
+	st.vertex_owner[0] = 0
+	st.vertex_building[0] = GameTypes.BuildingType.SETTLEMENT
+	st.vertex_owner[1] = 0
+	st.vertex_building[1] = GameTypes.BuildingType.SETTLEMENT
+	st.vertex_owner[2] = 1
+	st.vertex_building[2] = GameTypes.BuildingType.SETTLEMENT
+	st.turn_number = 9
+	st.winner = 0
+	st.phase = GameTypes.TurnPhase.GAME_OVER
+	var evs: Array[String] = []
+	ui._on_state_updated(st, evs)
+
+func _test_win1_sequence_body(ui: Node) -> void:
+	var sc = load(UI_SCRIPT_PATH)
+	var done_stage := int(sc.WIN_STAGE_DONE)
+	var standings_stage := int(sc.WIN_STAGE_STANDINGS)
+	var want_ms := (float(sc.WIN_SPOTLIGHT_SECONDS) + float(sc.WIN_BANNER_SECONDS) + float(sc.WIN_STANDINGS_SECONDS)) * 1000.0
+	if int(ui._settings_speed_idx) >= 2:
+		want_ms *= float(sc.WIN_SPEED_MULTIPLIER)
+	_use_real_frame_rate()
+	ui._reduce_motion = false
+	ui.win_sequence_override = 1.0
+	await _win1_end_match(ui, 71001)
+	var t0 := Time.get_ticks_msec()
+	_assert(bool(ui._splash_shown), "Game over still sets the splash flag")
+	_assert(int(ui._win_stage) == 1, "Game over lands on the spotlight stage, got %d" % int(ui._win_stage))
+	_assert(not bool(ui._splash_overlay.visible), "The results panel stays hidden through the opening stages")
+	_assert(not bool(ui._results_btn.visible), "The header Results button stays hidden during the sequence")
+	_assert(bool(ui._win_skip_catcher.is_visible_in_tree()), "A full-screen catcher is up during the sequence")
+	for b in _win1_splash_buttons(ui):
+		var btn := b as Button
+		_assert(not bool(btn.is_visible_in_tree()), "The results button '%s' is not visible during stage 1" % str(btn.text))
+		_assert(bool(btn.disabled), "The results button '%s' is not enabled during stage 1" % str(btn.text))
+	var to_stage3 := 0
+	while int(ui._win_stage) < 3 and to_stage3 < 200:
+		await ui.get_tree().process_frame
+		to_stage3 += 1
+	_assert(int(ui._win_stage) == 3, "The run reaches the banner sweep after %d frames, got stage %d" % [to_stage3, int(ui._win_stage)])
+	_assert(ui._win_banner != null and bool(ui._win_banner.visible), "The banner is up when stage 3 starts")
+	await ui.get_tree().process_frame
+	var rows: Array = ui._win_rows
+	_assert(int(rows.size()) == 2, "Two standings rows are recorded, got %d" % int(rows.size()))
+	_assert(int(ui._win_vp_labels.size()) == 2, "One VP label per row, got %d" % int(ui._win_vp_labels.size()))
+	_assert(int(ui._win_vp_values.size()) == 2, "One VP value per row, got %d" % int(ui._win_vp_values.size()))
+	_assert(int(ui._win_vp_values[0]) == 2, "The winner row counts 2 VP, got %d" % int(ui._win_vp_values[0]))
+	_assert(int(ui._win_vp_values[1]) == 1, "The last row counts 1 VP, got %d" % int(ui._win_vp_values[1]))
+	var row_frames: Array = [-1, -1]
+	var vp_between := false
+	var enabled_early := ""
+	var watched := 0
+	while int(ui._win_stage) != done_stage and watched < 400:
+		await ui.get_tree().process_frame
+		watched += 1
+		if int(ui._win_stage) == standings_stage:
+			for i in range(rows.size()):
+				if int(row_frames[i]) == -1 and bool((rows[i] as Control).is_visible_in_tree()):
+					row_frames[i] = watched
+			var v := _win1_vp_value(ui, 0)
+			if v > 0 and v < int(ui._win_vp_values[0]):
+				vp_between = true
+			for b in _win1_splash_buttons(ui):
+				if not bool((b as Button).disabled):
+					enabled_early += str((b as Button).text) + " "
+	var run_ms := float(Time.get_ticks_msec() - t0)
+	_assert(int(ui._win_stage) == done_stage, "The sequence ends on stage done, got %d after %d frames" % [int(ui._win_stage), watched])
+	_assert(int(row_frames[0]) > 0 and int(row_frames[1]) > 0, "Both rows became visible (last place frame %d, 1st frame %d)" % [int(row_frames[1]), int(row_frames[0])])
+	_assert(int(row_frames[1]) < int(row_frames[0]), "Rows appear from last place up: 2nd at frame %d, 1st at frame %d" % [int(row_frames[1]), int(row_frames[0])])
+	_assert(vp_between, "The 2 VP row's count prints a value strictly between 0 and 2 part way through")
+	_assert(enabled_early == "", "No results button turns on before the end (%s)" % enabled_early)
+	_assert(run_ms >= want_ms * 0.8 and run_ms <= want_ms * 1.2, "The run lasts %.0f ms, want %.0f ms within 20%%" % [run_ms, want_ms])
+	_assert(bool(ui._splash_overlay.visible), "The end of the sequence shows the results")
+	_assert(not bool(ui._win_skip_catcher.is_visible_in_tree()), "The catcher is gone at the end")
+	_assert(int(ui._win_layer.get_child_count()) == 0, "No node is left on the sequence layer, got %d" % int(ui._win_layer.get_child_count()))
+	_assert(ui._win_banner == null, "The banner node is gone at the end")
+	_assert(not bool(ui._results_btn.visible), "The header Results button stays hidden in the final state")
+	for b in _win1_splash_buttons(ui):
+		var btn2 := b as Button
+		_assert(bool(btn2.is_visible_in_tree()), "The results button '%s' is visible at the end" % str(btn2.text))
+		_assert(not bool(btn2.disabled), "The results button '%s' is enabled at the end" % str(btn2.text))
+	await _ui_settle(1)
+	_assert(int(ui._splash_rows.get_child_count()) == 2, "The panel holds exactly the two rows at the end, got %d" % int(ui._splash_rows.get_child_count()))
+	var final_snapshot := _win1_snapshot(ui)
+	_ui_real_click(ui._splash_view_board_btn)
+	_assert(not bool(ui._splash_overlay.visible), "View Board hides the finished results")
+	_assert(bool(ui._results_btn.visible), "View Board brings the header Results button back")
+	_ui_real_click(ui._results_btn)
+	_assert(bool(ui._splash_overlay.visible), "Results shows the finished results again in the same frame")
+	_assert(int(ui._win_stage) == done_stage, "Reopening the results never replays the sequence, stage %d" % int(ui._win_stage))
+	_assert(ui._win_banner == null and int(ui._win_layer.get_child_count()) == 0, "No banner comes back when the results reopen")
+	_assert(bool(ui._results_btn.visible), "Results leaves the header button up, as it has always done")
+	_assert(_win1_snapshot(ui) == final_snapshot, "Reopening the results shows the same final state")
+	ui.win_sequence_override = 0.0
+	await _win1_end_match(ui, 71001)
+	_assert(int(ui._win_stage) == done_stage, "Override 0.0 finishes in the same frame as game over, got %d" % int(ui._win_stage))
+	_assert(bool(ui._splash_overlay.visible), "Override 0.0 shows the results in the same frame")
+	_assert(not bool(ui._win_skip_catcher.visible), "Override 0.0 never shows the catcher")
+	_assert(_win1_snapshot(ui) == final_snapshot, "The sequence ends where the instant run leaves it\n  sequence: %s\n  instant:  %s" % [final_snapshot, _win1_snapshot(ui)])
+	ui.win_sequence_override = 1.0
+	await _win1_end_match(ui, 71001)
+	await ui.get_tree().process_frame
+	_assert(int(ui._win_stage) == 1, "The click-skip run is in stage 1, got %d" % int(ui._win_stage))
+	_assert(bool(ui._win_skip_catcher.is_visible_in_tree()), "The catcher is up for the click")
+	_ui_real_click(ui._win_skip_catcher)
+	_assert(int(ui._win_stage) == done_stage, "A real click on the catcher ends the sequence in the same frame, got %d" % int(ui._win_stage))
+	_assert(bool(ui._splash_overlay.visible), "The click skip shows the finished results")
+	_assert(not bool(ui._win_skip_catcher.visible), "The click skip hides the catcher")
+	_assert(int(ui._win_layer.get_child_count()) == 0, "The click skip leaves no sequence node")
+	_assert(_win1_snapshot(ui) == final_snapshot, "The click skip lands on the same final state")
+	await _win1_end_match(ui, 71001)
+	await ui.get_tree().process_frame
+	_assert(int(ui._win_stage) == 1, "The Esc-skip run starts in stage 1, got %d" % int(ui._win_stage))
+	var waited4 := 0
+	while int(ui._win_stage) != standings_stage and waited4 < 300:
+		await ui.get_tree().process_frame
+		waited4 += 1
+	_assert(int(ui._win_stage) == standings_stage, "The Esc-skip run reached stage 4 after %d frames, stage %d" % [waited4, int(ui._win_stage)])
+	_ui_send_key(KEY_ESCAPE)
+	_assert(int(ui._win_stage) == done_stage, "Esc ends the sequence in the same frame, got %d" % int(ui._win_stage))
+	_assert(bool(ui._splash_overlay.visible), "Esc shows the finished results")
+	_assert(_win1_snapshot(ui) == final_snapshot, "Esc lands on the same final state")
+	ui._reduce_motion = true
+	await _win1_end_match(ui, 71001)
+	_assert(int(ui._win_stage) == done_stage, "Reduce motion shows the final state in the same frame, got %d" % int(ui._win_stage))
+	_assert(bool(ui._splash_overlay.visible), "Reduce motion shows the results in the same frame")
+	_assert(not bool(ui._win_skip_catcher.visible), "Reduce motion never shows the catcher")
+	_assert(int(ui._win_layer.get_child_count()) == 0, "Reduce motion leaves nothing on the sequence layer")
+	_assert(_win1_snapshot(ui) == final_snapshot, "Reduce motion shows the same final state")
+	ui._reduce_motion = false
+	await _win1_end_match(ui, 71001)
+	var to_cancel_stage := 0
+	while int(ui._win_stage) < 3 and to_cancel_stage < 200:
+		await ui.get_tree().process_frame
+		to_cancel_stage += 1
+	_assert(int(ui._win_stage) == 3, "The cancel run is in stage 3 after %d frames, got %d" % [to_cancel_stage, int(ui._win_stage)])
+	_assert(int(ui._win_layer.get_child_count()) > 0, "The banner sits on the sequence layer before the cancel")
+	ui._show_lobby()
+	_assert(int(ui._win_stage) == 0, "The lobby cancels the sequence, got %d" % int(ui._win_stage))
+	_assert(int(ui._win_layer.get_child_count()) == 0, "The lobby cancel leaves no sequence node")
+	_assert(not bool(ui._win_skip_catcher.visible), "The lobby cancel hides the catcher")
+	ui._start_match_from_lobby_settings()
+	_assert(int(ui._win_stage) == 0, "A new match leaves the stage at none, got %d" % int(ui._win_stage))
+	_assert(int(ui._win_layer.get_child_count()) == 0, "A new match mid-sequence leaves no sequence node")
+	_assert(not bool(ui._win_skip_catcher.visible), "A new match mid-sequence hides the catcher")
+	_assert(not bool(ui._splash_overlay.visible), "A cancel mid-sequence does not show the results")
+	_assert(ui.session.state.phase != GameTypes.TurnPhase.GAME_OVER, "A new match is running after the cancel")
+	ui.win_sequence_override = 0.0
+	_pass_section("155. Win1 Sequence Skeleton Test (game over blocks input on a transparent catcher and runs the banner sweep into the standings count-in: spotlight stage 1 first, then the banner, rows landing last place first with their VP counting up, buttons enabled only at the end, total length within 20% of the constants, the final state equal to an instant run, a real catcher click and Esc skipping in one frame, reduce motion and override 0 staying instant, View board and Results never replaying it, and a new match cancelling it cleanly)")
+
+# Ends a fresh three-seat match through _on_state_updated, with pieces for two
+# players: two for the winner (a settlement and a city, plus two roads) and one
+# settlement plus two roads for the loser. `human` false makes all three seats
+# bots. The helper pushes `_sfx_won` false first the way
+# `_start_match_from_lobby_settings` does when a real match begins, so each match
+# may ask for its end clip once.
+func _win2_end_match(ui: Node, seed_val: int, winner: int, human: bool) -> void:
+	var seat0: int = SeatConfig.SeatType.HUMAN if human else SeatConfig.SeatType.AI_MEDIUM
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, seat0, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_EASY, "Pike"),
+	]
+	ui._win_sequence_cancel()
+	if ui._splash_overlay != null:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	ui._sfx_won = false
+	ui.session.start_match(seed_val, seats, true, 0)
+	await _ui_settle(1)
+	var st: GameState = ui.session.state
+	var loser := 1 - winner
+	st.vertex_owner[0] = winner
+	st.vertex_building[0] = GameTypes.BuildingType.SETTLEMENT
+	st.vertex_owner[1] = winner
+	st.vertex_building[1] = GameTypes.BuildingType.CITY
+	st.vertex_owner[2] = loser
+	st.vertex_building[2] = GameTypes.BuildingType.SETTLEMENT
+	st.edge_owner[0] = winner
+	st.edge_owner[1] = winner
+	st.edge_owner[2] = loser
+	st.edge_owner[3] = loser
+	st.turn_number = 11
+	st.winner = winner
+	st.phase = GameTypes.TurnPhase.GAME_OVER
+	var evs: Array[String] = []
+	ui._on_state_updated(st, evs)
+
+func _test_win2_spotlight_sound_body(ui: Node) -> void:
+	var sc = load(UI_SCRIPT_PATH)
+	var done_stage := int(sc.WIN_STAGE_DONE)
+	var banner_stage := int(sc.WIN_STAGE_BANNER)
+	var standings_stage := int(sc.WIN_STAGE_STANDINGS)
+	var board: Node = ui._board_view
+	var sfx: Node = ui.get_node_or_null("Sfx")
+	_assert(board != null, "The UI carries a board view to spotlight")
+	_assert(sfx != null, "The UI owns the Sfx node the sound checks read")
+	_use_real_frame_rate()
+	ui._reduce_motion = false
+	ui.win_sequence_override = 1.0
+	_assert(int(board.spotlight_pid()) == -1, "No spotlight runs before a match ends")
+	# ---- run A: the stage 1 flow at real frame rate, won by the human seat ----
+	await _win2_end_match(ui, 72001, 0, true)
+	var t0 := Time.get_ticks_msec()
+	var bakes0 := int(board.static_bake_requests)
+	var winner_col: Color = GameTypes.PLAYER_COLORS[0]
+	var loser_col: Color = GameTypes.PLAYER_COLORS[1]
+	_assert(winner_col.s > 0.3 and loser_col.s > 0.3, "Both seats own saturated colours the grey-out can bite (%.2f, %.2f)" % [winner_col.s, loser_col.s])
+	_assert(board.spotlight_piece_color(1) == loser_col, "With no spotlight baked the loser's pieces hold their full colour")
+	_assert(int(ui._win_stage) == 1, "Game over opens the spotlight stage, got %d" % int(ui._win_stage))
+	_assert(int(board.spotlight_pid()) == 0, "The board spotlights the winner seat 0, got %d" % int(board.spotlight_pid()))
+	_assert(not bool(ui._splash_overlay.visible), "The results are not visible when stage 1 opens")
+	var max_strength := 0.0
+	var splash_hidden := true
+	var watched := 0
+	while int(ui._win_stage) == 1 and watched < 300:
+		await ui.get_tree().process_frame
+		watched += 1
+		max_strength = maxf(max_strength, float(board.spotlight_strength()))
+		if bool(ui._splash_overlay.visible):
+			splash_hidden = false
+	var stage1_ms := float(Time.get_ticks_msec() - t0)
+	_assert(int(ui._win_stage) != 1, "Stage 1 ended after %d frames" % watched)
+	_assert(splash_hidden, "The results overlay stays hidden through every stage 1 frame")
+	_assert(max_strength >= 0.999, "The spotlight strength fades to 1.0 during stage 1, max %.2f" % max_strength)
+	var want_ms := float(sc.WIN_SPOTLIGHT_SECONDS) * 1000.0
+	if int(ui._settings_speed_idx) >= 2:
+		want_ms *= float(sc.WIN_SPEED_MULTIPLIER)
+	_assert(stage1_ms >= want_ms * 0.8 and stage1_ms <= want_ms * 1.2, "Stage 1 lasts %.0f ms, want %.0f ms within 20%%" % [stage1_ms, want_ms])
+	_assert(int(board.spotlight_pid()) == 0, "The spotlight holds the winner as stage 2 passes by, got %d" % int(board.spotlight_pid()))
+	var bakes := int(board.static_bake_requests) - bakes0
+	_assert(bakes >= 2 and bakes <= 8, "The static layers re-render %d times across %d stage 1 frames: a handful, never per frame" % [bakes, watched])
+	# The grey-out is asserted through the board's colour API: the headless
+	# harness has no rendering device, so no viewport pixels can be read (the
+	# only get_pixel uses in this file sample CPU-built icon textures).
+	_assert(board.spotlight_piece_color(0) == winner_col, "The winner's pieces keep the full colour under the spotlight")
+	var loser_now: Color = board.spotlight_piece_color(1)
+	_assert(loser_now.s < loser_col.s, "The loser's pieces fade toward grey under the spotlight (%.2f -> %.2f saturation)" % [loser_col.s, loser_now.s])
+	var saw3 := false
+	var saw4 := false
+	var cleared_at4 := false
+	watched = 0
+	while int(ui._win_stage) != done_stage and watched < 400:
+		await ui.get_tree().process_frame
+		watched += 1
+		if not saw3 and int(ui._win_stage) == banner_stage:
+			saw3 = true
+			_assert(int(board.spotlight_pid()) == 0, "The spotlight is still on during the banner stage, got %d" % int(board.spotlight_pid()))
+		if not saw4 and int(ui._win_stage) == standings_stage:
+			saw4 = true
+			cleared_at4 = int(board.spotlight_pid()) == -1
+			break
+	_assert(saw3, "The watch passed through the banner stage")
+	_assert(saw4 and cleared_at4, "The first standings frame finds the spotlight cleared, pid %d" % int(board.spotlight_pid()))
+	_assert(board.spotlight_piece_color(0) == winner_col and board.spotlight_piece_color(1) == loser_col, "Both seats' piece colours are back to full once the spotlight is gone")
+	# ---- run B: a real click during stage 1 skips in one frame and clears ----
+	await _win2_end_match(ui, 72002, 1, true)
+	await ui.get_tree().process_frame
+	await ui.get_tree().process_frame
+	_assert(int(ui._win_stage) == 1, "The skip run sits in stage 1, got %d" % int(ui._win_stage))
+	_assert(int(board.spotlight_pid()) == 1, "The skip run spotlights seat 1, got %d" % int(board.spotlight_pid()))
+	_ui_real_click(ui._win_skip_catcher)
+	_assert(int(ui._win_stage) == done_stage, "A click during stage 1 skips in the same frame, got %d" % int(ui._win_stage))
+	_assert(int(board.spotlight_pid()) == -1, "The skip clears the spotlight, got %d" % int(board.spotlight_pid()))
+	_assert(bool(ui._splash_overlay.visible), "The stage 1 skip shows the finished results")
+	# ---- run C: a new match during stage 1 cancels and clears ----
+	await _win2_end_match(ui, 72003, 0, true)
+	await ui.get_tree().process_frame
+	_assert(int(ui._win_stage) == 1 and int(board.spotlight_pid()) == 0, "The cancel run sits in stage 1 with the spotlight set (stage %d, pid %d)" % [int(ui._win_stage), int(board.spotlight_pid())])
+	ui._show_lobby()
+	_assert(int(board.spotlight_pid()) == -1, "The lobby cancel clears the spotlight, got %d" % int(board.spotlight_pid()))
+	ui._start_match_from_lobby_settings()
+	_assert(int(ui._win_stage) == 0 and int(board.spotlight_pid()) == -1, "A new match leaves no stage and no spotlight (stage %d, pid %d)" % [int(ui._win_stage), int(board.spotlight_pid())])
+	# ---- runs D/E: the instant paths never set the spotlight ----
+	ui.win_sequence_override = 0.0
+	await _win2_end_match(ui, 72004, 0, true)
+	_assert(int(ui._win_stage) == done_stage, "Override 0.0 finishes in the same frame, got %d" % int(ui._win_stage))
+	_assert(int(board.spotlight_pid()) == -1, "Override 0.0 never sets the spotlight, got %d" % int(board.spotlight_pid()))
+	ui._reduce_motion = true
+	ui.win_sequence_override = 1.0
+	await _win2_end_match(ui, 72005, 0, true)
+	_assert(int(ui._win_stage) == done_stage, "Reduce motion finishes in the same frame even at override 1.0, got %d" % int(ui._win_stage))
+	_assert(int(board.spotlight_pid()) == -1, "Reduce motion never sets the spotlight, got %d" % int(board.spotlight_pid()))
+	ui._reduce_motion = false
+	# The headless build gives the board no rendering device at all (not even
+	# the static SubViewports), so a viewport pixel read is impossible here.
+	var land_img: Image = null
+	if board._land_vp != null:
+		land_img = (board._land_vp as SubViewport).get_texture().get_image()
+	_assert(land_img == null or land_img.get_width() == 0 or land_img.get_height() == 0, "The headless viewport offers no board pixels to sample (size %s), which is why the colour checks run through the API" % [str(land_img.get_size()) if land_img != null else "no land layer"])
+	# ---- sound: which end clip each finished match asks for, exactly once ----
+	ui.win_sequence_override = 0.0
+	var no_evs: Array[String] = []
+	var w0 := int(Sfx.play_count.get("win", 0))
+	var l0 := int(Sfx.play_count.get("lose", 0))
+	await _win2_end_match(ui, 72006, 0, true)
+	_assert(str(Sfx.last_played) == "win", "A one-human match won by the human plays the fanfare, got '%s'" % str(Sfx.last_played))
+	_assert(int(Sfx.play_count.get("win", 0)) == w0 + 1 and int(Sfx.play_count.get("lose", 0)) == l0, "That match requested the fanfare exactly once")
+	ui._on_state_updated(ui.session.state, no_evs)
+	_assert(int(Sfx.play_count.get("win", 0)) == w0 + 1, "A repeated update for the finished match plays no second fanfare")
+	w0 = int(Sfx.play_count.get("win", 0))
+	l0 = int(Sfx.play_count.get("lose", 0))
+	await _win2_end_match(ui, 72007, 1, true)
+	_assert(str(Sfx.last_played) == "lose", "A one-human match won by an AI plays the lose clip, got '%s'" % str(Sfx.last_played))
+	_assert(int(Sfx.play_count.get("lose", 0)) == l0 + 1 and int(Sfx.play_count.get("win", 0)) == w0, "That match requested the lose clip exactly once")
+	w0 = int(Sfx.play_count.get("win", 0))
+	l0 = int(Sfx.play_count.get("lose", 0))
+	await _win2_end_match(ui, 72008, 0, false)
+	_assert(str(Sfx.last_played) == "win", "A match without human seats celebrates with the fanfare, got '%s'" % str(Sfx.last_played))
+	_assert(int(Sfx.play_count.get("win", 0)) == w0 + 1 and int(Sfx.play_count.get("lose", 0)) == l0, "The no-human match requested the fanfare exactly once")
+	# ---- the clips themselves ----
+	var win_len := float(sfx.clip_length("win"))
+	var lose_len := float(sfx.clip_length("lose"))
+	_assert(win_len >= 1.3 and win_len <= 1.5, "The fanfare is about 1.4 s, got %.3f s" % win_len)
+	_assert(lose_len >= 0.7 and lose_len <= 0.9, "The lose clip is about 0.8 s, got %.3f s" % lose_len)
+	_assert(lose_len < win_len, "The lose clip is the shorter one (%.3f s < %.3f s)" % [lose_len, win_len])
+	ui.win_sequence_override = 0.0
+	_pass_section("156. Win2 Spotlight & Sound Test (game over fades a board spotlight onto the winner for stage 1: losers grey out while the winner keeps full colour, the spotlight holds through the banner and clears on the first standings frame, skips, cancels, instant override and reduce motion all leave it cleared, the static layers bake a handful of times not per frame, and the finished match plays the fanfare or the descending lose clip exactly once)")
+
+# Ends a fresh four-seat match through _on_state_updated with `winner` (seat 0 is the
+# only human) holding `n_old` Charter cards in dev_cards and `n_new` in new_dev_cards.
+# `_prev_dev_counts` is blanked first so the GAME_OVER update treats the planted cards
+# as the match-start baseline instead of flying flyers into the flight layer next to
+# the sequence.
+func _win3_end_match(ui: Node, seed_val: int, winner: int, n_old: int, n_new: int) -> void:
+	var seats: Array[SeatConfig] = [
+		SeatConfig.new(0, SeatConfig.SeatType.HUMAN, "Azure"),
+		SeatConfig.new(1, SeatConfig.SeatType.AI_MEDIUM, "Dune"),
+		SeatConfig.new(2, SeatConfig.SeatType.AI_MEDIUM, "Pike"),
+		SeatConfig.new(3, SeatConfig.SeatType.AI_EASY, "Riven"),
+	]
+	ui._win_sequence_cancel()
+	if ui._splash_overlay != null:
+		ui._splash_overlay.visible = false
+	ui._splash_shown = false
+	ui._sfx_won = false
+	ui.session.start_match(seed_val, seats, true, 0)
+	await _ui_settle(1)
+	var st: GameState = ui.session.state
+	st.vertex_owner[0] = winner
+	st.vertex_building[0] = GameTypes.BuildingType.SETTLEMENT
+	st.vertex_owner[1] = winner
+	st.vertex_building[1] = GameTypes.BuildingType.CITY
+	var loser := 1 - winner
+	st.vertex_owner[2] = loser
+	st.vertex_building[2] = GameTypes.BuildingType.SETTLEMENT
+	st.edge_owner[0] = winner
+	st.edge_owner[1] = winner
+	st.edge_owner[2] = loser
+	st.edge_owner[3] = loser
+	for i in range(n_old):
+		(st.players[winner]["dev_cards"] as Array).append(GameTypes.DevCardType.CHARTER_POINT)
+	for i in range(n_new):
+		(st.players[winner]["new_dev_cards"] as Array).append(GameTypes.DevCardType.CHARTER_POINT)
+	ui._prev_dev_counts = []
+	st.turn_number = 11
+	st.winner = winner
+	st.phase = GameTypes.TurnPhase.GAME_OVER
+	var evs: Array[String] = []
+	ui._on_state_updated(st, evs)
+
+# Charter card / +1 label nodes currently on the sequence layer.
+func _win3_card_nodes(ui: Node) -> int:
+	var n := 0
+	for c in ui._win_layer.get_children():
+		if c is CardFace and bool((c as Control).visible):
+			n += 1
+	return n
+
+func _win3_label_nodes(ui: Node) -> int:
+	var n := 0
+	for c in ui._win_layer.get_children():
+		if c is Label and str((c as Label).text) == "+1":
+			n += 1
+	return n
+
+func _test_win3_charters_confetti_body(ui: Node) -> void:
+	var sc = load(UI_SCRIPT_PATH)
+	var done_stage := int(sc.WIN_STAGE_DONE)
+	var charters_stage := int(sc.WIN_STAGE_CHARTERS)
+	var banner_stage := int(sc.WIN_STAGE_BANNER)
+	_assert(ui._board_view != null, "The UI carries a board view to fan the Charter cards on")
+	_use_real_frame_rate()
+	ui._reduce_motion = false
+	ui.win_sequence_override = 1.0
+	var want2_ms := 2.0 * float(sc.WIN_CHARTER_SECONDS_EACH) * 1000.0 + float(sc.WIN_CHARTER_HOLD_SECONDS) * 1000.0
+	# ---- run A: the human winner holds 2 Charter cards (1 in dev_cards, 1 in new) ----
+	await _win3_end_match(ui, 73001, 0, 1, 1)
+	_assert(int(ui._win_stage) == 1, "Game over opens the spotlight stage, got %d" % int(ui._win_stage))
+	var saw2 := false
+	var t2_in := -1.0
+	var stage2_ms := -1.0
+	var hold_cards := -1
+	var hold_labels := -1
+	var hold_dist := -1.0
+	var hold_card_w := -1.0
+	var hold_off := -1.0
+	var hold_inside := false
+	var t3_in := -1.0
+	var confetti_at_start := false
+	var confetti_pieces := -1
+	var pos_a := PackedVector2Array()
+	var confetti_gone_ms := -1.0
+	var cards_at_300 := -1
+	var labels_at_300 := -1
+	var t0 := Time.get_ticks_msec()
+	var watched := 0
+	while int(ui._win_stage) != done_stage and watched < 900:
+		await ui.get_tree().process_frame
+		watched += 1
+		var stg := int(ui._win_stage)
+		if stg == charters_stage:
+			saw2 = true
+			if t2_in < 0.0:
+				t2_in = float(Time.get_ticks_msec())
+			elif hold_cards < 0 and Time.get_ticks_msec() - t2_in > 950.0:
+				hold_cards = _win3_card_nodes(ui)
+				hold_labels = _win3_label_nodes(ui)
+				var nodes: Array = ui._win_charter_nodes
+				if nodes.size() == 2:
+					var c0: Control = nodes[0]
+					var c1: Control = nodes[1]
+					hold_dist = c0.position.distance_to(c1.position)
+					hold_card_w = c0.size.x
+					var mid: Vector2 = (c0.position + c1.position) * 0.5 + c0.size * 0.5
+					hold_off = mid.distance_to(ui._to_ui_local(ui._board_view.get_global_rect().get_center()))
+					var brect: Rect2 = ui._board_view.get_global_rect()
+					hold_inside = brect.encloses(c0.get_global_rect().grow(-1.0)) and brect.encloses(c1.get_global_rect().grow(-1.0))
+		elif t2_in >= 0.0 and stage2_ms < 0.0:
+			stage2_ms = float(Time.get_ticks_msec()) - t2_in
+		if stg == banner_stage:
+			if t3_in < 0.0:
+				t3_in = float(Time.get_ticks_msec())
+				confetti_at_start = ui._win_confetti != null and is_instance_valid(ui._win_confetti)
+			if confetti_pieces < 0 and confetti_at_start and Time.get_ticks_msec() - t3_in > 150.0:
+				confetti_pieces = int(ui._win_confetti.pieces.size())
+		if pos_a.is_empty() and confetti_at_start and t3_in >= 0.0 and Time.get_ticks_msec() - t3_in > 800.0 and ui._win_confetti != null and is_instance_valid(ui._win_confetti):
+			pos_a = ui._win_confetti.piece_positions_at(0.7)
+		if t3_in >= 0.0 and cards_at_300 < 0 and Time.get_ticks_msec() - t3_in > 300.0:
+			cards_at_300 = _win3_card_nodes(ui)
+			labels_at_300 = _win3_label_nodes(ui)
+		if confetti_gone_ms < 0.0 and t3_in >= 0.0 and (ui._win_confetti == null or not is_instance_valid(ui._win_confetti)):
+			confetti_gone_ms = float(Time.get_ticks_msec()) - t3_in
+	var run_a_ms := float(Time.get_ticks_msec() - t0)
+	_assert(saw2, "A winner with Charter cards is watched sitting in stage 2")
+	_assert(stage2_ms > 0.0, "Stage 2's length was measured (run ended on stage %d)" % int(ui._win_stage))
+	_assert(stage2_ms >= want2_ms * 0.8 and stage2_ms <= want2_ms * 1.2, "Stage 2 with 2 Charter cards lasts %.0f ms, want %.0f ms within 20%%" % [stage2_ms, want2_ms])
+	_assert(hold_cards == 2, "Exactly 2 Charter card nodes sit on the sequence layer during the hold, got %d" % hold_cards)
+	_assert(hold_labels == 2, "Both +1 labels are still on the layer during the hold, got %d" % hold_labels)
+	_assert(int(ui._win_plus_one_spawned) == 2, "Exactly 2 +1 labels were spawned in total, got %d" % int(ui._win_plus_one_spawned))
+	_assert(absf(hold_dist - float(sc.WIN_CHARTER_SPACING_PX)) < 0.5, "The two cards sit %.1f px apart, want %.0f" % [hold_dist, float(sc.WIN_CHARTER_SPACING_PX)])
+	_assert(absf(hold_card_w - float(sc.WIN_CHARTER_CARD_PX)) < 0.5, "A landed Charter card is %.1f px wide, want %.0f" % [hold_card_w, float(sc.WIN_CHARTER_CARD_PX)])
+	_assert(hold_off < 1.0, "The card pair is centred on the board centre within %.2f px" % hold_off)
+	_assert(hold_inside, "Both Charter cards sit inside the board view's rect during the hold")
+	var starts: Array = ui._win_charter_starts
+	_assert(starts.size() == 2, "Both card start points were recorded, got %d" % starts.size())
+	var bad_starts := 0
+	for p0 in starts:
+		var p: Vector2 = p0
+		if not is_finite(p.x) or not is_finite(p.y) or p == Vector2.INF or p == Vector2.ZERO:
+			bad_starts += 1
+	_assert(bad_starts == 0, "Every Charter card start point is finite and never (0,0): %s" % str(starts))
+	_assert(cards_at_300 == 0, "No Charter card node remains 0.3 s into stage 3, got %d" % cards_at_300)
+	_assert(labels_at_300 == 0, "No +1 label node remains 0.3 s into stage 3, got %d" % labels_at_300)
+	_assert(confetti_at_start, "Confetti is up on the first watched frame of stage 3")
+	_assert(confetti_pieces >= 80 and confetti_pieces <= 100, "The confetti holds %d pieces, want between 80 and 100" % confetti_pieces)
+	_assert(pos_a.size() == confetti_pieces, "Every piece reports a position at t=0.7 s, got %d of %d" % [pos_a.size(), confetti_pieces])
+	_assert(confetti_gone_ms >= float(sc.WIN_CONFETTI_SECONDS) * 1000.0 - 300.0 and confetti_gone_ms <= float(sc.WIN_CONFETTI_SECONDS) * 1000.0 + 200.0, "Confetti is gone %.0f ms after stage 3 began, want around %0.0f ms" % [confetti_gone_ms, float(sc.WIN_CONFETTI_SECONDS) * 1000.0])
+	_assert(int(ui._win_layer.get_child_count()) == 0, "The finished run leaves no node on the sequence layer, got %d" % int(ui._win_layer.get_child_count()))
+	# ---- run A2: the same match seed lands every confetti piece in the same place ----
+	await _win3_end_match(ui, 73001, 0, 1, 1)
+	var pos_b := PackedVector2Array()
+	watched = 0
+	while int(ui._win_stage) != done_stage and watched < 900:
+		await ui.get_tree().process_frame
+		watched += 1
+		if pos_b.is_empty() and int(ui._win_stage) == banner_stage and ui._win_confetti != null and is_instance_valid(ui._win_confetti):
+			pos_b = ui._win_confetti.piece_positions_at(0.7)
+	_assert(not pos_b.is_empty(), "The rerun of seed 73001 raises confetti too")
+	_assert(pos_b.size() == pos_a.size(), "The rerun spawns the same number of pieces, got %d vs %d" % [pos_b.size(), pos_a.size()])
+	var moved := 0
+	for i in range(mini(pos_a.size(), pos_b.size())):
+		if pos_a[i] != pos_b[i]:
+			moved += 1
+	_assert(pos_a.size() >= 80 and moved == 0, "Two runs of one match seed put every piece in the same place at t=0.7 s (%d differ)" % moved)
+	# ---- run B: a winner without Charter cards skips stage 2 entirely ----
+	await _win3_end_match(ui, 73002, 0, 0, 0)
+	var saw_b2 := false
+	var tb := float(Time.get_ticks_msec())
+	watched = 0
+	while int(ui._win_stage) != done_stage and watched < 900:
+		await ui.get_tree().process_frame
+		watched += 1
+		if int(ui._win_stage) == charters_stage:
+			saw_b2 = true
+	var run_b_ms := float(Time.get_ticks_msec()) - tb
+	_assert(not saw_b2, "A winner without Charter cards is never watched sitting in stage 2")
+	_assert(int(ui._win_stage) == done_stage, "The zero-charter run still finishes, stage %d" % int(ui._win_stage))
+	_assert(run_a_ms - run_b_ms >= want2_ms * 0.75, "Skipping stage 2 shortens the run: %.0f ms vs %.0f ms, want at least %.0f ms apart" % [run_a_ms, run_b_ms, want2_ms * 0.75])
+	# ---- run C: five cards fan across the board without touching the window edge ----
+	await _win3_end_match(ui, 73003, 0, 3, 2)
+	var tc := -1.0
+	var five := -1
+	var five_board := false
+	var five_window := false
+	var winrect: Rect2 = ui.get_viewport().get_visible_rect()
+	watched = 0
+	while int(ui._win_stage) != done_stage and watched < 900:
+		await ui.get_tree().process_frame
+		watched += 1
+		if int(ui._win_stage) == charters_stage:
+			if tc < 0.0:
+				tc = float(Time.get_ticks_msec())
+			elif five < 0 and Time.get_ticks_msec() - tc > 2300.0:
+				five = _win3_card_nodes(ui)
+				var nodes5: Array = ui._win_charter_nodes
+				var brect5: Rect2 = ui._board_view.get_global_rect()
+				five_board = nodes5.size() == 5
+				five_window = nodes5.size() == 5
+				for e in nodes5:
+					var gr: Rect2 = (e as Control).get_global_rect()
+					if not brect5.encloses(gr.grow(-1.0)):
+						five_board = false
+					if not winrect.encloses(gr.grow(-2.0)):
+						five_window = false
+	_assert(five == 5, "All five Charter cards are fanned out during the hold, got %d" % five)
+	_assert(five_board, "Every one of the five cards sits inside the board view's rect")
+	_assert(five_window, "None of the five cards touches the window edge")
+	# ---- run D: the loss variant runs the same stages but rains nothing ----
+	await _win3_end_match(ui, 73004, 1, 0, 0)
+	var saw3d := false
+	var lose_confetti := false
+	watched = 0
+	while int(ui._win_stage) != done_stage and watched < 900:
+		await ui.get_tree().process_frame
+		watched += 1
+		if int(ui._win_stage) == banner_stage:
+			saw3d = true
+			if ui._win_confetti != null and is_instance_valid(ui._win_confetti):
+				lose_confetti = true
+	_assert(saw3d, "The loss variant still runs the banner stage")
+	_assert(not lose_confetti, "A one-human match won by an AI spawns no confetti")
+	# ---- reduce motion and the instant override spawn nothing ----
+	ui._reduce_motion = true
+	await _win3_end_match(ui, 73005, 0, 2, 0)
+	_assert(int(ui._win_stage) == done_stage, "Reduce motion shows the final state in the same frame, got %d" % int(ui._win_stage))
+	_assert(ui._win_confetti == null, "Reduce motion spawns no confetti")
+	_assert(_win3_card_nodes(ui) == 0, "Reduce motion spawns no Charter cards")
+	_assert(int(ui._win_layer.get_child_count()) == 0, "Reduce motion leaves the sequence layer empty")
+	ui._reduce_motion = false
+	ui.win_sequence_override = 0.0
+	await _win3_end_match(ui, 73006, 0, 2, 0)
+	_assert(int(ui._win_stage) == done_stage, "Override 0.0 shows the final state in the same frame, got %d" % int(ui._win_stage))
+	_assert(ui._win_confetti == null, "Override 0.0 spawns no confetti")
+	_assert(_win3_card_nodes(ui) == 0, "Override 0.0 spawns no Charter cards")
+	_assert(int(ui._win_layer.get_child_count()) == 0, "Override 0.0 leaves the sequence layer empty")
+	ui.win_sequence_override = 1.0
+	# ---- a skip during stage 2 frees the reveal in the same frame ----
+	await _win3_end_match(ui, 73007, 0, 1, 1)
+	watched = 0
+	while int(ui._win_stage) != charters_stage and watched < 300:
+		await ui.get_tree().process_frame
+		watched += 1
+	_assert(int(ui._win_stage) == charters_stage, "The skip run sits in stage 2 after %d frames, got %d" % [watched, int(ui._win_stage)])
+	_ui_real_click(ui._win_skip_catcher)
+	_assert(int(ui._win_stage) == done_stage, "A click during stage 2 skips in the same frame, got %d" % int(ui._win_stage))
+	_assert(bool(ui._splash_overlay.visible), "The stage 2 skip shows the finished results")
+	await _ui_settle(2)
+	_assert(int(ui._win_layer.get_child_count()) == 0, "The stage 2 skip frees every sequence node, got %d" % int(ui._win_layer.get_child_count()))
+	_assert(ui._win_confetti == null and _win3_card_nodes(ui) == 0 and _win3_label_nodes(ui) == 0, "The skip leaves no Charter card, +1 label or confetti behind")
+	_assert(int(ui._win_plus_one_spawned) == 0, "The skip lands before the first card touches down, so no +1 was ever spawned, got %d" % int(ui._win_plus_one_spawned))
+	_assert(int(ui._flight_layer.get_child_count()) == 0, "The flight layer holds no sequence node after the skip, got %d" % int(ui._flight_layer.get_child_count()))
+	# ---- a new match during stage 2 cancels the reveal cleanly ----
+	await _win3_end_match(ui, 73008, 0, 1, 1)
+	watched = 0
+	while int(ui._win_stage) != charters_stage and watched < 300:
+		await ui.get_tree().process_frame
+		watched += 1
+	_assert(int(ui._win_stage) == charters_stage, "The cancel run sits in stage 2, got %d" % int(ui._win_stage))
+	ui._show_lobby()
+	_assert(int(ui._win_stage) == 0, "The lobby cancels the stage 2 sequence, got %d" % int(ui._win_stage))
+	await _ui_settle(2)
+	_assert(int(ui._win_layer.get_child_count()) == 0, "The stage 2 cancel empties the sequence layer, got %d" % int(ui._win_layer.get_child_count()))
+	_assert(ui._win_confetti == null and _win3_card_nodes(ui) == 0 and _win3_label_nodes(ui) == 0, "The cancel leaves no Charter card, +1 label or confetti behind")
+	_assert(not bool(ui._splash_overlay.visible), "A cancel mid-sequence does not show the results")
+	ui._start_match_from_lobby_settings()
+	_assert(int(ui._win_stage) == 0, "A new match leaves the stage at none, got %d" % int(ui._win_stage))
+	_assert(int(ui._win_layer.get_child_count()) == 0 and int(ui._flight_layer.get_child_count()) == 0, "The new match leaves both layers free of sequence nodes")
+	# ---- the banner title clears 4.5:1 on every seat colour's band ----
+	for pid in range(GameTypes.PLAYER_COLORS.size()):
+		var band: Color = GameTypes.PLAYER_COLORS[pid].darkened(0.15)
+		var pick: Dictionary = sc._win_banner_text_choice(band)
+		var fill: Color = pick["fill"]
+		var outline: Color = pick["outline"]
+		var r_fill := float(sc._wcag_contrast(fill, band))
+		var r_edge := float(sc._wcag_contrast(fill, outline))
+		_assert(r_fill >= 4.5, "Seat %d's banner fill %s on its band reads at %.2f, want at least 4.5" % [pid, str(fill), r_fill])
+		_assert(r_edge >= 4.5, "Seat %d's outline %s opposes its fill at %.2f, want at least 4.5" % [pid, str(outline), r_edge])
+	ui.win_sequence_override = 0.0
+	_pass_section("157. Win3 Charter Reveal, Confetti & Banner Contrast Test (a winner holding Charter cards fans face-up copies from their action anchor onto the board centre 108 px apart, each landing pops and floats a +1 in the seat colour, the cards fade out over the first quarter second of the banner, one seeded Control rains winner colour plus gold and cream for 1.6 s from the banner on in the win variant only and never earlier or in the loss variant, skip and cancel during the reveal free every node at once, and the banner title picks cream or ink by band luminance so every seat colour clears 4.5:1)")
+
+# win4: every key during stages 1..4 is a skip or swallowed (F1/M/T/R open nothing
+# and change nothing, yet work again after the stage is done), the Charter fan
+# recomputes its centre from the board view's live rect when the window resizes
+# mid-hold, and the bigger cards and banner (96/108 px fan, 128 px band, title
+# 46 with fit-to-width down to 28) measure as specified.
+func _test_win4_guards_sizing_body(ui: Node) -> void:
+	var sc = load(UI_SCRIPT_PATH)
+	var done_stage := int(sc.WIN_STAGE_DONE)
+	var charters_stage := int(sc.WIN_STAGE_CHARTERS)
+	var banner_stage := int(sc.WIN_STAGE_BANNER)
+	_use_real_frame_rate()
+	ui._reduce_motion = false
+	ui.win_sequence_override = 1.0
+	# ---- run A: stage 1 and stage 3 keys skip or swallow ----
+	await _win3_end_match(ui, 74101, 0, 2, 0)
+	_assert(int(ui._win_stage) == 1, "Game over opens the spotlight stage, got %d" % int(ui._win_stage))
+	_assert(bool(ui._win_stage_blocks_keys()), "Stage 1 reports the key-blocking window as open")
+	for key in [KEY_F1, KEY_M, KEY_T, KEY_R]:
+		_ui_send_key(key)
+	_assert(not bool(ui._help_overlay.visible), "F1 during stage 1 opened no help overlay")
+	_assert(not bool(ui._settings_overlay.visible), "the shortcut run opened no settings overlay during stage 1")
+	_assert(not bool(ui._menu_popup.visible), "M during stage 1 opened no menu popup")
+	_assert(ui._trade_tray == null or not bool(ui._trade_tray.visible), "T during stage 1 opened no trade tray")
+	_assert(int(ui._win_stage) == 1, "The four shortcuts left the stage untouched, got %d" % int(ui._win_stage))
+	await ui.get_tree().process_frame
+	_assert(int(ui._win_stage) == 1, "One frame later the shortcut run is still sitting in stage 1, got %d" % int(ui._win_stage))
+	var saw3 := false
+	var checked3 := false
+	var watched := 0
+	while int(ui._win_stage) != done_stage and watched < 900:
+		await ui.get_tree().process_frame
+		watched += 1
+		if int(ui._win_stage) == banner_stage and not checked3:
+			checked3 = true
+			saw3 = true
+			for key in [KEY_F1, KEY_M, KEY_T, KEY_R]:
+				_ui_send_key(key)
+			_assert(not bool(ui._help_overlay.visible), "F1 during stage 3 opened no help overlay")
+			_assert(not bool(ui._menu_popup.visible), "M during stage 3 opened no menu popup")
+			_assert(ui._trade_tray == null or not bool(ui._trade_tray.visible), "T during stage 3 opened no trade tray")
+			_assert(int(ui._win_stage) == banner_stage, "The four shortcuts left stage 3 untouched, got %d" % int(ui._win_stage))
+	_assert(saw3, "The guarded run watched the banner stage")
+	# ---- run B: resize mid-hold keeps the fan centred; banner sizing ----
+	await _win3_end_match(ui, 74102, 0, 2, 0)
+	var t2_in := -1.0
+	var resized := false
+	var restored := false
+	var mid_off := -1.0
+	var mid_off_back := -1.0
+	var board_dy := 0.0
+	var saw2b := false
+	var font_at_3 := -1
+	var band_h := -1.0
+	watched = 0
+	while int(ui._win_stage) != done_stage and watched < 1500:
+		await ui.get_tree().process_frame
+		watched += 1
+		var stg := int(ui._win_stage)
+		if stg == charters_stage:
+			saw2b = true
+			if t2_in < 0.0:
+				t2_in = float(Time.get_ticks_msec())
+			elif not resized and Time.get_ticks_msec() - t2_in > 900.0:
+				resized = true
+				var before: Vector2 = ui._to_ui_local(ui._board_view.get_global_rect().get_center())
+				root.size = Vector2i(1280, 1000)
+				await ui.get_tree().process_frame
+				await ui.get_tree().process_frame
+				var after: Vector2 = ui._to_ui_local(ui._board_view.get_global_rect().get_center())
+				board_dy = absf(after.y - before.y)
+				var nodes: Array = ui._win_charter_nodes
+				if nodes.size() == 2:
+					var c0: Control = nodes[0]
+					var c1: Control = nodes[1]
+					var mid: Vector2 = (c0.position + c1.position) * 0.5 + c0.size * 0.5
+					mid_off = mid.distance_to(after)
+				root.size = Vector2i(1280, 800)
+				await ui.get_tree().process_frame
+				await ui.get_tree().process_frame
+				var back: Vector2 = ui._to_ui_local(ui._board_view.get_global_rect().get_center())
+				var nodes2: Array = ui._win_charter_nodes
+				if nodes2.size() == 2 and nodes2[0] != null and nodes2[1] != null:
+					var b0: Control = nodes2[0]
+					var b1: Control = nodes2[1]
+					var mid2: Vector2 = (b0.position + b1.position) * 0.5 + b0.size * 0.5
+					mid_off_back = mid2.distance_to(back)
+				restored = true
+		elif stg == banner_stage and font_at_3 < 0 and ui._win_banner_label != null:
+			font_at_3 = int(ui._win_banner_label.get_theme_font_size("font_size"))
+			if ui._win_banner != null and is_instance_valid(ui._win_banner):
+				band_h = float(ui._win_banner.size.y)
+	_assert(saw2b, "The resize run sat in stage 2")
+	_assert(resized, "The window was resized during the stage 2 hold")
+	_assert(board_dy > 50.0, "The resize actually moved the board centre %.1f px (the test would be vacuous otherwise)" % board_dy)
+	_assert(mid_off >= 0.0 and mid_off <= 1.0, "Two frames after the resize the fan centre is %.2f px from the board centre, want within 1" % mid_off)
+	_assert(not restored or mid_off_back < 0.0 or mid_off_back <= 1.0, "After restoring the window the fan re-centres within %.2f px" % mid_off_back)
+	_assert(int(sc.WIN_BANNER_HEIGHT_PX) == 128 and absf(band_h - 128.0) < 0.5, "The banner band is %.1f px tall during stage 3, want 128" % band_h)
+	_assert(font_at_3 == 46, "On a 1280 px wide window the banner title keeps its %.0f px font, want 46" % float(font_at_3))
+	# the skip keys still skip with the guard in place: Esc jumps to the final state
+	_ui_send_key(KEY_ESCAPE)
+	_assert(int(ui._win_stage) == done_stage, "Esc during stage 3 still skips to the final state, got %d" % int(ui._win_stage))
+	# ---- the title fit helper: 46 normally, shrink to fit, floor at 28 ----
+	var title := "Crimson wins!"
+	var font_1280: int = ui._win_banner_fit_font_size(title, 1280.0)
+	_assert(font_1280 == 46, "The longest name's title keeps font 46 on a 1280 px window, got %d" % font_1280)
+	var w46 := float(ThemeDB.fallback_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 46).x)
+	_assert(w46 + 12.0 <= 1280.0 - 2.0 * float(sc.WIN_BANNER_FIT_MARGIN_PX), "The 46 px title measures %.0f px plus outline and fits 1280 with margin" % w46)
+	var font_narrow: int = ui._win_banner_fit_font_size(title, 340.0)
+	_assert(font_narrow < 46 and font_narrow >= 28, "The title shrinks to %d px on a 340 px window, want under 46 and at least 28" % font_narrow)
+	var w_narrow := float(ThemeDB.fallback_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_narrow).x)
+	_assert(w_narrow + 12.0 <= 340.0 - 2.0 * float(sc.WIN_BANNER_FIT_MARGIN_PX) + 0.5, "The shrunk title measures %.0f px plus outline and fits the 340 px window" % w_narrow)
+	_assert(int(ui._win_banner_fit_font_size(title, 120.0)) == int(sc.WIN_BANNER_FIT_FONT_MIN), "The fit bottoms out at the 28 px floor, got %d" % int(ui._win_banner_fit_font_size(title, 120.0)))
+	# ---- the 5-card fan fits the board rect with its 12 px margin ----
+	var board_w: float = ui._win_charter_board_rect().size.x
+	var fan_w := float(sc.WIN_CHARTER_CARD_PX) + 4.0 * float(sc.WIN_CHARTER_SPACING_PX)
+	_assert(absf(fan_w - 528.0) < 0.01, "Five cards at 96 px with 108 px spacing span exactly 528 px, got %.0f" % fan_w)
+	_assert(board_w - 2.0 * float(sc.WIN_CHARTER_FAN_MARGIN_PX) >= fan_w, "The %.0f px board rect holds the 528 px fan with a 12 px margin (%.0f px free)" % [board_w, board_w - fan_w])
+	_assert(int(sc.WIN_CHARTER_CARD_PX) == 96 and int(sc.WIN_CHARTER_SPACING_PX) == 108 and int(sc.WIN_PLUS_ONE_FONT_SIZE) == 30, "The card, spacing and +1 font constants read 96, 108 and 30")
+	# ---- the same keys work again once the stage is done ----
+	_ui_real_click(ui._splash_new_game_btn)
+	await _ui_settle(3)
+	_assert(not bool(ui._splash_overlay.visible), "The New Game click closes the results screen")
+	_assert(not bool(ui._win_stage_blocks_keys()), "With no stage running the key window is closed")
+	_ui_send_key(KEY_F1)
+	_assert(bool(ui._help_overlay.visible), "F1 opens the help overlay again once the stage is done")
+	_ui_send_key(KEY_ESCAPE)
+	_assert(not bool(ui._help_overlay.visible), "Esc closes the help overlay again")
+	_ui_send_key(KEY_M)
+	_assert(bool(ui._menu_popup.visible), "M opens the menu popup again once the stage is done")
+	ui._menu_popup.hide()
+	ui.win_sequence_override = 0.0
+	_pass_section("158. Win4 Input Guard, Live Fan & Banner Sizing Test (every key during stages 1 to 4 is a skip or swallowed so F1, M, T and R open nothing and change nothing yet work again once the stage is done, a window resize during the Charter hold re-centres the fan on the board's live rect within a pixel two frames later, five 96 px cards at 108 px spacing span 528 px and fit the board rect with a 12 px margin, and the 128 px banner keeps its 46 px title at 1280 px wide with fit-to-width shrink floored at 28)")
