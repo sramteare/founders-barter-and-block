@@ -395,6 +395,31 @@ var _settings_muted: bool = false
 var _settings_text_idx: int = 0
 var _settings_speed_idx: int = 1
 var _reduce_motion: bool = false
+var _win_stage: int = 0
+var _win_stage_t: float = 0.0
+var _win_scale: float = 1.0
+var _win_pid: int = -1
+var _win_layer: Control = null
+var _win_skip_catcher: ColorRect = null
+var _win_banner: ColorRect = null
+var _win_banner_label: Label = null
+var _win_rows: Array[Control] = []
+var _win_vp_labels: Array[Label] = []
+var _win_vp_values: Array[int] = []
+var _win_winner_row: int = -1
+var _win_charter_total: int = 0
+var _win_charter_nodes: Array[CardFace] = []
+var _win_charter_starts: Array[Vector2] = []
+var _win_charter_landed: Array[bool] = []
+var _win_plus_one_nodes: Array[Label] = []
+var _win_plus_one_land_at: Array[float] = []
+var _win_plus_one_spawned: int = 0
+var _win_elapsed: float = 0.0
+var _win_confetti = null
+var _win_confetti_t0: float = 0.0
+var _splash_center: CenterContainer = null
+var _splash_panel: PanelContainer = null
+var _splash_btn_row: HBoxContainer = null
 
 static var settings_path: String = "user://settings.cfg"
 static var turn_min_seconds_override: float = -1.0
@@ -402,6 +427,66 @@ static var trade_pace_override: float = -1.0
 static var DEV_WINDOW_WIDTH_OVERRIDE: float = 0.0
 const TEXT_SCALE_VALUES: Array[float] = [1.0, 1.15, 1.3]
 const BOT_SPEED_VALUES: Array[float] = [0.6, 0.25, 0.08]
+
+# Win sequence timings, all in seconds at normal speed. Stage numbers: 0 = none,
+# 1..4 = the stages, 5 = done. Every duration below is scaled once, at the start of
+# the run, by WIN_SPEED_MULTIPLIER (fastest bot speed) and by win_sequence_override
+# (tests), so the stage bodies only ever see these raw numbers.
+const WIN_STAGE_NONE := 0
+const WIN_STAGE_SPOTLIGHT := 1
+const WIN_STAGE_CHARTERS := 2
+const WIN_STAGE_BANNER := 3
+const WIN_STAGE_STANDINGS := 4
+const WIN_STAGE_DONE := 5
+const WIN_SPOTLIGHT_SECONDS := 0.8
+const WIN_SPOTLIGHT_FADE_SECONDS := 0.25
+const WIN_CHARTER_SECONDS_EACH := 0.45
+const WIN_CHARTER_HOLD_SECONDS := 0.35
+const WIN_CHARTER_FLY_SECONDS := 0.4
+const WIN_CHARTER_MAX_FAN := 5
+const WIN_CHARTER_CARD_PX := 96.0
+const WIN_CHARTER_SPACING_PX := 108.0
+const WIN_CHARTER_FAN_MARGIN_PX := 12.0
+const WIN_CHARTER_FAN_MIN_SCALE := 0.02
+const WIN_CHARTER_ARC_PX := 30.0
+const WIN_CHARTER_POP_SECONDS := 0.16
+const WIN_CHARTER_POP_SCALE := 0.12
+const WIN_CHARTER_FADE_SECONDS := 0.25
+const WIN_PLUS_ONE_FONT_SIZE := 30
+const WIN_PLUS_ONE_SECONDS := 0.6
+const WIN_PLUS_ONE_FLOAT_PX := 28.0
+const WIN_BANNER_SECONDS := 0.5
+const WIN_CONFETTI_SECONDS := 1.6
+const WIN_CONFETTI_COUNT := 90
+const WIN_CONFETTI_SPAWN_SECONDS := 0.5
+const WIN_CONFETTI_PIECE_W := 6.0
+const WIN_CONFETTI_PIECE_H := 10.0
+const WIN_CONFETTI_CREAM := Color(0.97, 0.93, 0.83)
+const WIN_BANNER_MIN_CONTRAST := 4.5
+const WIN_BANNER_SPLIT_LUMINANCE := 0.2
+const WIN_BANNER_TEXT_CREAM := Color(0.97, 0.93, 0.83)
+const WIN_BANNER_TEXT_WHITE := Color(1.0, 1.0, 1.0)
+const WIN_BANNER_TEXT_INK := Color(0.29, 0.22, 0.169)
+const WIN_BANNER_TEXT_NEAR_BLACK := Color(0.10, 0.07, 0.05)
+const WIN_STANDINGS_SECONDS := 1.6
+const WIN_BANNER_EXIT_SECONDS := 0.25
+const WIN_PANEL_RISE_SECONDS := 0.3
+const WIN_ROW_STAGGER_SECONDS := 0.25
+const WIN_ROW_FADE_SECONDS := 0.2
+const WIN_VP_COUNT_SECONDS := 0.4
+const WIN_BUTTONS_FADE_SECONDS := 0.2
+const WIN_ROW_POP_SECONDS := 0.24
+const WIN_SPEED_MULTIPLIER := 0.6
+const WIN_PANEL_RISE_PX := 24.0
+const WIN_BANNER_HEIGHT_PX := 128.0
+const WIN_BANNER_ABOVE_MIDDLE_PX := 40.0
+const WIN_BANNER_FONT_SIZE := 46
+const WIN_BANNER_FIT_FONT_MIN := 28
+const WIN_BANNER_FIT_MARGIN_PX := 24.0
+const WIN_BANNER_TITLE_OUTLINE_PX := 6
+const WIN_BANNER_START_SCALE := 0.6
+const WIN_ROW_POP_SCALE := 1.06
+static var win_sequence_override: float = -1.0
 
 func _ready() -> void:
 	_sfx = Sfx.new()
@@ -1583,6 +1668,7 @@ func _build_splash_overlay() -> void:
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_splash_overlay.add_child(center)
+	_splash_center = center
 	var panel := PanelContainer.new()
 	var st := _paper_panel_style(true)
 	st.set_corner_radius_all(12)
@@ -1666,9 +1752,115 @@ func _build_splash_overlay() -> void:
 	_splash_quit_btn.custom_minimum_size = Vector2(120, 40)
 	_style_button(_splash_quit_btn, "ghost")
 	_splash_quit_btn.pressed.connect(func() -> void:
+		_win_sequence_cancel()
 		get_tree().quit()
 	)
 	btn_row.add_child(_splash_quit_btn)
+	_splash_btn_row = btn_row
+	_splash_panel = panel
+	_build_win_sequence_layer()
+
+func _build_win_sequence_layer() -> void:
+	_win_layer = Control.new()
+	_win_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_win_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_win_layer.z_index = 3
+	_win_layer.visible = false
+	add_child(_win_layer)
+	_win_skip_catcher = ColorRect.new()
+	_win_skip_catcher.color = Color(0.0, 0.0, 0.0, 0.0)
+	_win_skip_catcher.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_win_skip_catcher.mouse_filter = Control.MOUSE_FILTER_STOP
+	_win_skip_catcher.z_index = 4
+	_win_skip_catcher.visible = false
+	_win_skip_catcher.gui_input.connect(_on_win_catcher_input)
+	add_child(_win_skip_catcher)
+
+func _on_win_catcher_input(event: InputEvent) -> void:
+	if _win_stage <= WIN_STAGE_NONE or _win_stage >= WIN_STAGE_DONE:
+		return
+	var hit := false
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		hit = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	elif event is InputEventScreenTouch:
+		hit = (event as InputEventScreenTouch).pressed
+	if hit:
+		_win_sequence_skip()
+		get_viewport().set_input_as_handled()
+
+# True when only one seat is human and the winner is a bot: the loss variant
+# (no confetti, the shorter descending clip). 0 or 2+ human seats always celebrate.
+func _win_is_win_variant() -> bool:
+	return _win_variant_for_pid(_win_pid)
+
+# The same decision for a given pid, usable before the splash build has set
+# `_win_pid` (the GAME_OVER sound asks with `state.winner`).
+func _win_variant_for_pid(pid: int) -> bool:
+	if session == null or session.state == null:
+		return true
+	var humans := 0
+	for s in session.seats:
+		if s != null and not s.is_ai():
+			humans += 1
+	if humans != 1:
+		return true
+	return not (pid >= 0 and pid < session.seats.size() and session.seats[pid].is_ai())
+
+# WIN_CONFETTI_COUNT small rectangles (winner colour, gold and cream) fall across the
+# window for WIN_CONFETTI_SECONDS, drawn by one Control (see WinConfetti below) and
+# added after the banner so they fall in front of it. The faller sits on `_win_layer`
+# (z 3), above the results panel (z 2): the pieces are small, sparse and gone before
+# the count-in ends, and every other temporary node of the sequence lives there too.
+# Piece paths are pure functions of elapsed time over an RNG seeded from the match
+# seed, so two runs of one seed land every piece in the same place. Never spawned by
+# reduce motion, the instant override or the loss variant (this hook only runs in the
+# win variant, and the instant paths never reach stage 3).
+func _win_confetti_begin() -> void:
+	if _reduce_motion or _win_layer == null or not is_instance_valid(_win_layer):
+		return
+	if session == null or session.state == null:
+		return
+	var win_size := get_viewport().get_visible_rect().size
+	var cols: Array = []
+	cols.append(GameTypes.PLAYER_COLORS[_win_pid] if _win_pid >= 0 else Palette.ACCENT_GOLD)
+	cols.append(Palette.ACCENT_GOLD)
+	cols.append(WIN_CONFETTI_CREAM)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(session.state.seed_val)
+	var c := WinConfetti.new()
+	c.piece_w = WIN_CONFETTI_PIECE_W
+	c.piece_h = WIN_CONFETTI_PIECE_H
+	for i in range(WIN_CONFETTI_COUNT):
+		c.pieces.append({
+			"x": rng.randf() * win_size.x,
+			"y": -12.0 - rng.randf() * 30.0,
+			"vx": (rng.randf() - 0.5) * 70.0,
+			"vy": (win_size.y + 80.0) / WIN_CONFETTI_SECONDS * (0.85 + rng.randf() * 0.3),
+			"spawn": rng.randf() * WIN_CONFETTI_SPAWN_SECONDS,
+			"rot": rng.randf() * TAU,
+			"spin": (rng.randf() - 0.5) * 9.0,
+			"phase": rng.randf() * TAU,
+			"sway": 2.5 + rng.randf() * 2.0,
+			"col": cols[i % 3],
+		})
+	_win_layer.add_child(c)
+	c.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	c.z_index = 5
+	_win_confetti = c
+	_win_confetti_t0 = _win_elapsed
+
+# Drives the faller from the sequence clock and frees it the frame its fall is over.
+func _win_confetti_tick(e: float) -> void:
+	if _win_confetti == null or not is_instance_valid(_win_confetti):
+		return
+	if e >= WIN_CONFETTI_SECONDS:
+		var c: Node = _win_confetti
+		_win_confetti = null
+		_win_retire(c)
+		return
+	_win_confetti.set_elapsed(e)
 
 func _show_splash(state: GameState) -> void:
 	_splash_shown = true
@@ -1676,6 +1868,16 @@ func _show_splash(state: GameState) -> void:
 	_apply_save_buttons()
 	_finish_steal_anim()
 	_reset_flight_state()
+	_build_splash_results(state)
+	if _reduce_motion or (win_sequence_override >= 0.0 and win_sequence_override <= 0.001):
+		_win_sequence_finish()
+		return
+	_win_sequence_start()
+
+# Fills the results panel: title, turns line and one standings row per seat, winner
+# first. Shared by the sequence and by every instant show, so both end in exactly the
+# same node and text state.
+func _build_splash_results(state: GameState) -> void:
 	var standings: Array = state.get_standings()
 	var winner_pid: int = int(state.winner)
 	var ordered: Array = []
@@ -1688,6 +1890,11 @@ func _show_splash(state: GameState) -> void:
 			ordered.append(row0)
 	if ordered.is_empty():
 		winner_pid = -1
+	_win_pid = winner_pid
+	_win_winner_row = 0 if winner_pid >= 0 else -1
+	_win_rows.clear()
+	_win_vp_labels.clear()
+	_win_vp_values.clear()
 	_splash_title.add_theme_color_override("font_color", Palette.HEADING)
 	if _splash_banner != null:
 		_splash_banner.color = GameTypes.PLAYER_COLORS[winner_pid].darkened(0.15) if winner_pid >= 0 else Palette.TEXT_MUTED
@@ -1726,6 +1933,9 @@ func _show_splash(state: GameState) -> void:
 		vp_lbl.add_theme_font_size_override("font_size", 14)
 		vp_lbl.add_theme_color_override("font_color", Palette.HEADING)
 		hbox.add_child(vp_lbl)
+		_win_rows.append(hbox)
+		_win_vp_labels.append(vp_lbl)
+		_win_vp_values.append(int(row["vp"]))
 		var s_n := int(row["settlements"])
 		var c_n := int(row["cities"])
 		var city_word := "city" if c_n == 1 else "cities"
@@ -1742,9 +1952,651 @@ func _show_splash(state: GameState) -> void:
 		detail_lbl.add_theme_font_size_override("font_size", 12)
 		detail_lbl.add_theme_color_override("font_color", Palette.TEXT_MUTED)
 		hbox.add_child(detail_lbl)
+
+# ---------------------------------------------------------------- win sequence
+# One stage variable (`_win_stage`: 0 none, 1..4 the stages, 5 done) and one
+# function that moves it forward (`_advance_win_sequence`). Each stage owns its
+# _win_stage_*_begin/_apply/_end trio; every animation is computed from stage time.
+
+func _win_sequence_start() -> void:
+	_win_scale = win_sequence_override if win_sequence_override > 0.001 else 1.0
+	if _settings_speed_idx >= 2:
+		_win_scale *= WIN_SPEED_MULTIPLIER
+	_splash_overlay.visible = false
+	_results_btn.visible = false
+	_win_set_splash_buttons_enabled(false)
+	if _win_layer != null and is_instance_valid(_win_layer):
+		_win_layer.visible = true
+	if _win_skip_catcher != null and is_instance_valid(_win_skip_catcher):
+		_win_skip_catcher.visible = true
+	_win_charter_total = 0
+	_win_charter_nodes.clear()
+	_win_charter_starts.clear()
+	_win_charter_landed.clear()
+	_win_plus_one_nodes.clear()
+	_win_plus_one_land_at.clear()
+	_win_plus_one_spawned = 0
+	_win_confetti = null
+	_win_confetti_t0 = 0.0
+	_win_elapsed = 0.0
+	_win_stage = WIN_STAGE_SPOTLIGHT
+	_win_stage_t = 0.0
+	_win_enter_stage()
+	_advance_win_sequence(0.0)
+
+# Seconds the current stage runs at raw speed. Stage 2 lasts one card slot per held
+# Charter card plus the hold; a winner without Charter cards gets 0 s, which the
+# advance loop skips through inside one frame (the stage is then never observed).
+func _win_stage_seconds() -> float:
+	match _win_stage:
+		WIN_STAGE_SPOTLIGHT:
+			return WIN_SPOTLIGHT_SECONDS
+		WIN_STAGE_CHARTERS:
+			if _win_charter_total <= 0:
+				return 0.0
+			return WIN_CHARTER_SECONDS_EACH * float(_win_charter_total) + WIN_CHARTER_HOLD_SECONDS
+		WIN_STAGE_BANNER:
+			return WIN_BANNER_SECONDS
+		WIN_STAGE_STANDINGS:
+			return WIN_STANDINGS_SECONDS
+		_:
+			return 0.0
+
+func _win_enter_stage() -> void:
+	match _win_stage:
+		WIN_STAGE_SPOTLIGHT:
+			_win_stage_spotlight_begin()
+		WIN_STAGE_CHARTERS:
+			_win_stage_charters_begin()
+		WIN_STAGE_BANNER:
+			_win_stage_banner_begin()
+		WIN_STAGE_STANDINGS:
+			_win_stage_standings_begin()
+		_:
+			pass
+
+func _win_leave_stage() -> void:
+	match _win_stage:
+		WIN_STAGE_SPOTLIGHT:
+			_win_stage_spotlight_end()
+		WIN_STAGE_CHARTERS:
+			_win_stage_charters_end()
+		WIN_STAGE_BANNER:
+			_win_stage_banner_end()
+		WIN_STAGE_STANDINGS:
+			_win_stage_standings_end()
+		_:
+			pass
+
+# The only function that advances the stage. `_win_stage_t` counts raw seconds since
+# the current stage began and `_win_elapsed` raw seconds since the sequence began (the
+# scale is applied to delta here), so the stage bodies only see the constants and
+# animations that outlive a stage (the "+1" floaters, the confetti) can clock off
+# `_win_elapsed`.
+func _advance_win_sequence(delta: float) -> void:
+	if _win_stage <= WIN_STAGE_NONE or _win_stage >= WIN_STAGE_DONE:
+		return
+	_win_stage_t += delta / maxf(_win_scale, 0.0001)
+	_win_elapsed += delta / maxf(_win_scale, 0.0001)
+	var guard := 0
+	while _win_stage > WIN_STAGE_NONE and _win_stage < WIN_STAGE_DONE and guard < 12:
+		guard += 1
+		var dur := _win_stage_seconds()
+		if _win_stage_t < dur:
+			_win_apply_stage()
+			return
+		_win_stage_t -= dur
+		_win_leave_stage()
+		_win_stage += 1
+		if _win_stage >= WIN_STAGE_DONE:
+			_win_sequence_finish()
+			return
+		_win_enter_stage()
+	if _win_stage > WIN_STAGE_NONE and _win_stage < WIN_STAGE_DONE:
+		_win_apply_stage()
+
+func _win_apply_stage() -> void:
+	match _win_stage:
+		WIN_STAGE_SPOTLIGHT:
+			_win_stage_spotlight_apply(_win_stage_t)
+		WIN_STAGE_CHARTERS:
+			_win_stage_charters_apply(_win_stage_t)
+		WIN_STAGE_BANNER:
+			_win_stage_banner_apply(clampf(_win_stage_t / WIN_BANNER_SECONDS, 0.0, 1.0))
+			_win_charter_fade_apply(_win_stage_t)
+			_win_plus_one_apply(_win_elapsed)
+			_win_confetti_tick(_win_elapsed - _win_confetti_t0)
+		WIN_STAGE_STANDINGS:
+			_win_stage_standings_apply(_win_stage_t)
+			_win_plus_one_apply(_win_elapsed)
+			_win_confetti_tick(_win_elapsed - _win_confetti_t0)
+		_:
+			pass
+
+# Stage 1, board spotlight (WIN_SPOTLIGHT_SECONDS): strength fades 0 -> 1 over
+# the first WIN_SPOTLIGHT_FADE_SECONDS and holds; the spotlight then stays on
+# through stages 2 and 3 and is cleared by the step that starts stage 4 or by
+# any early exit (finish / skip / cancel). No winner: nothing to light up.
+func _win_stage_spotlight_begin() -> void:
+	if _win_pid < 0:
+		return
+	_win_stage_spotlight_apply(0.0)
+
+func _win_stage_spotlight_apply(t: float) -> void:
+	if _board_view == null or not is_instance_valid(_board_view) or _win_pid < 0:
+		return
+	var k := clampf(t / WIN_SPOTLIGHT_FADE_SECONDS, 0.0, 1.0)
+	_board_view.set_spotlight(_win_pid, k)
+
+func _win_clear_spotlight() -> void:
+	if _board_view != null and is_instance_valid(_board_view):
+		_board_view.clear_spotlight()
+
+# Leaving stage 1 keeps the spotlight: it stays on through stages 2 and 3 and is
+# cleared when stage 4 begins or on any early exit.
+func _win_stage_spotlight_end() -> void:
+	pass
+
+# Stage 2, charter reveal: one face-up Charter card per held card (cap of
+# WIN_CHARTER_MAX_FAN) starts WIN_CHARTER_SECONDS_EACH apart, flies in
+# WIN_CHARTER_FLY_SECONDS from the winner's action-card anchor to a
+# WIN_CHARTER_SPACING_PX-spaced fan centred on the board view, lands with a small
+# pop and holds. Each landing spawns a "+1" in the winner's colour that floats up
+# and fades over WIN_PLUS_ONE_SECONDS. A fan of the full five cards is
+# WIN_CHARTER_CARD_PX + 4 * WIN_CHARTER_SPACING_PX wide; when that (or the actual
+# fan width, for fewer cards) would not fit the board view's live rect with a
+# WIN_CHARTER_FAN_MARGIN_PX margin, card size and spacing scale down together just
+# enough to fit (_win_charter_fan_scale). Slot positions and sizes are recomputed
+# from the live rect every frame while the stage runs and during the fade, so a
+# resize mid-stage keeps the fan centred and inside the board. The cards and labels
+# live on `_win_layer`, not the flight layer: `_flight_layer` belongs to gameplay
+# and `_reset_flight_state()` frees everything in it (a new match or lobby visit
+# mid-sequence would kill the cards early), while `_win_layer_cleanup()` already
+# frees every `_win_layer` child on finish, skip and cancel. Every position is
+# computed from stage time here, never tweened, so nothing free-running is left.
+func _win_stage_charters_begin() -> void:
+	_win_charter_total = mini(_count_win_charters(), WIN_CHARTER_MAX_FAN)
+	_win_charter_nodes.clear()
+	_win_charter_starts.clear()
+	_win_charter_landed.clear()
+	_win_plus_one_nodes.clear()
+	_win_plus_one_land_at.clear()
+	if _win_charter_total <= 0 or _win_pid < 0 or _win_layer == null or not is_instance_valid(_win_layer):
+		_win_charter_total = 0
+		return
+	var card_size := _win_charter_card_size()
+	for i in range(_win_charter_total):
+		_win_charter_starts.append(_win_charter_from(_win_pid))
+		_win_charter_landed.append(false)
+		var f := CardFace.new()
+		f.focusable = false
+		f.kind = "action"
+		f.action = GameTypes.DevCardType.CHARTER_POINT
+		f.show_name = false
+		f.custom_minimum_size = card_size
+		_win_layer.add_child(f)
+		_set_ignore_tree(f)
+		f.size = card_size
+		f.pivot_offset = card_size * 0.5
+		f.position = Vector2(_win_charter_starts[i]) - card_size * 0.5
+		f.visible = i == 0
+		f.z_index = 2
+		_win_charter_nodes.append(f)
+	_win_stage_charters_apply(0.0)
+
+func _win_stage_charters_apply(t: float) -> void:
+	for i in range(_win_charter_nodes.size()):
+		var f: CardFace = _win_charter_nodes[i]
+		if f == null or not is_instance_valid(f):
+			continue
+		var launch := float(i) * WIN_CHARTER_SECONDS_EACH
+		if t < launch:
+			if f.visible:
+				f.visible = false
+			continue
+		if not f.visible:
+			f.visible = true
+		_win_charter_sync_size(f)
+		var from: Vector2 = _win_charter_starts[i]
+		var to: Vector2 = _win_charter_slot(i)
+		var u := (t - launch) / WIN_CHARTER_FLY_SECONDS
+		var pos := to
+		if u < 1.0:
+			pos = from.lerp(to, ease(u, 1.2))
+			pos.y -= sin(u * PI) * WIN_CHARTER_ARC_PX
+		else:
+			var pt := t - (launch + WIN_CHARTER_FLY_SECONDS)
+			var sc := 1.0
+			if pt < WIN_CHARTER_POP_SECONDS:
+				sc = 1.0 + WIN_CHARTER_POP_SCALE * sin(PI * pt / WIN_CHARTER_POP_SECONDS)
+			f.scale = Vector2(sc, sc)
+			if not bool(_win_charter_landed[i]):
+				_win_charter_landed[i] = true
+				_spawn_win_plus_one(i, _win_elapsed)
+		f.position = pos - f.size * 0.5
+	_win_plus_one_apply(_win_elapsed)
+
+# The winner's held Charter cards, counted across played-so-far and bought-this-turn.
+func _count_win_charters() -> int:
+	if session == null or session.state == null or _win_pid < 0 or _win_pid >= session.state.players.size():
+		return 0
+	var p: Dictionary = session.state.players[_win_pid]
+	var n := 0
+	for c in p.get("dev_cards", []):
+		if int(c) == GameTypes.DevCardType.CHARTER_POINT:
+			n += 1
+	for c in p.get("new_dev_cards", []):
+		if int(c) == GameTypes.DevCardType.CHARTER_POINT:
+			n += 1
+	return n
+
+func _win_charter_point_ok(p: Vector2) -> bool:
+	return is_finite(p.x) and is_finite(p.y) and p != Vector2.INF and p != Vector2.ZERO
+
+# Where the winner's action cards are shown; never (0,0) or an INF point: the
+# scoreboard row centre takes over when the anchor is unavailable, the window
+# centre is the last resort.
+func _win_charter_from(pid: int) -> Vector2:
+	var p := _dev_anchor(pid, GameTypes.DevCardType.CHARTER_POINT)
+	if _win_charter_point_ok(p):
+		return p
+	var raw: Variant = _scoreboard_row_panels.get(pid, null)
+	if raw is Control and is_instance_valid(raw) and (raw as Control).is_inside_tree():
+		var row := _to_ui_local((raw as Control).get_global_rect().get_center())
+		if _win_charter_point_ok(row):
+			return row
+	var vs := get_viewport().get_visible_rect().size
+	if _win_charter_point_ok(vs * Vector2(0.5, 0.75)):
+		return vs * Vector2(0.5, 0.75)
+	return Vector2(8.0, 8.0)
+
+# The board view's rect in layer coordinates; the window centre stands in when the
+# board view is not in the tree (a cancel mid-sequence, a degenerate window).
+func _win_charter_board_rect() -> Rect2:
+	if _board_view != null and is_instance_valid(_board_view) and _board_view.is_inside_tree():
+		var gr := _board_view.get_global_rect()
+		return Rect2(_to_ui_local(gr.position), gr.size)
+	return Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
+
+func _win_charter_fan_center() -> Vector2:
+	return _win_charter_board_rect().get_center()
+
+# How far the fan may grow: card width and spacing scale by this factor so a fan of
+# `_win_charter_total` cards (worst case WIN_CHARTER_MAX_FAN) fits the board view's
+# live width with WIN_CHARTER_FAN_MARGIN_PX on both sides. Never exceeds 1.0, never
+# drops below WIN_CHARTER_FAN_MIN_SCALE (a degenerate tiny window keeps the nodes
+# well-formed).
+func _win_charter_fan_scale() -> float:
+	if _win_charter_total <= 0:
+		return 1.0
+	var fan_w := WIN_CHARTER_CARD_PX + float(_win_charter_total - 1) * WIN_CHARTER_SPACING_PX
+	var room := _win_charter_board_rect().size.x - 2.0 * WIN_CHARTER_FAN_MARGIN_PX
+	return clampf(room / maxf(fan_w, 1.0), WIN_CHARTER_FAN_MIN_SCALE, 1.0)
+
+func _win_charter_card_size() -> Vector2:
+	var w := WIN_CHARTER_CARD_PX * _win_charter_fan_scale()
+	return Vector2(w, w / CardFace.RATIO)
+
+# Live centre of card i's fan slot; recomputed every frame so a resize mid-stage
+# (and mid-fade) keeps the fan centred on the board.
+func _win_charter_slot(i: int) -> Vector2:
+	var fit := _win_charter_fan_scale()
+	var offset := (float(i) - float(_win_charter_total - 1) * 0.5) * WIN_CHARTER_SPACING_PX * fit
+	return _win_charter_fan_center() + Vector2(offset, 0.0)
+
+func _win_charter_sync_size(f: Control) -> void:
+	var s := _win_charter_card_size()
+	if f.size != s:
+		f.size = s
+	if f.pivot_offset != s * 0.5:
+		f.pivot_offset = s * 0.5
+
+func _spawn_win_plus_one(i: int, at: float) -> void:
+	if _win_layer == null or not is_instance_valid(_win_layer) or i >= _win_charter_total:
+		return
+	var l := Label.new()
+	l.text = "+1"
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.add_theme_font_size_override("font_size", WIN_PLUS_ONE_FONT_SIZE)
+	l.add_theme_color_override("font_color", GameTypes.PLAYER_COLORS[_win_pid] if _win_pid >= 0 else Palette.HEADING)
+	l.add_theme_color_override("font_outline_color", WIN_BANNER_TEXT_NEAR_BLACK)
+	l.add_theme_constant_override("outline_size", 5)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_win_layer.add_child(l)
+	l.z_index = 3
+	l.size = Vector2(64, 36)
+	_win_plus_one_nodes.append(l)
+	_win_plus_one_land_at.append(at)
+	_win_plus_one_spawned += 1
+
+# Floater position and fade, clocked off `_win_elapsed` so it runs past the end of
+# stage 2; retired the frame its float is over. Anchored on the card's live fan
+# slot, so the floaters follow the fan across a resize too.
+func _win_plus_one_apply(now: float) -> void:
+	for j in range(_win_plus_one_nodes.size()):
+		var l: Label = _win_plus_one_nodes[j]
+		if l == null or not is_instance_valid(l):
+			continue
+		var u := (now - float(_win_plus_one_land_at[j])) / WIN_PLUS_ONE_SECONDS
+		if u >= 1.0:
+			_win_retire(l)
+			_win_plus_one_nodes[j] = null
+			continue
+		if j >= _win_charter_total:
+			continue
+		var slot: Vector2 = _win_charter_slot(j)
+		var card_h := _win_charter_card_size().y
+		l.position = Vector2(slot.x - l.size.x * 0.5, slot.y - card_h * 0.5 - 28.0 - WIN_PLUS_ONE_FLOAT_PX * clampf(u, 0.0, 1.0))
+		l.modulate = Color(1.0, 1.0, 1.0, 1.0 - clampf(u, 0.0, 1.0))
+
+# The Charter cards stay through the hold and fade over the first
+# WIN_CHARTER_FADE_SECONDS of stage 3; a fully faded card is freed then. The fade
+# keeps re-sloting them on the live board rect, so a resize during the fade moves
+# the fan with the board.
+func _win_charter_fade_apply(t3: float) -> void:
+	if _win_charter_nodes.is_empty():
+		return
+	var k := clampf(t3 / WIN_CHARTER_FADE_SECONDS, 0.0, 1.0)
+	for i in range(_win_charter_nodes.size()):
+		var f: CardFace = _win_charter_nodes[i]
+		if f == null or not is_instance_valid(f):
+			continue
+		if k >= 1.0:
+			_win_retire(f)
+			_win_charter_nodes[i] = null
+		else:
+			_win_charter_sync_size(f)
+			f.position = _win_charter_slot(i) - f.size * 0.5
+			f.modulate = Color(1.0, 1.0, 1.0, 1.0 - k)
+
+# Removes and frees one sequence node right away (the layer cleanup covers anything
+# still around at finish, skip or cancel).
+func _win_retire(n: Node) -> void:
+	if n != null and is_instance_valid(n):
+		if n.get_parent() != null:
+			n.get_parent().remove_child(n)
+		n.free()
+
+# Leaving stage 2 keeps the cards and labels: they fade over the first frames of
+# stage 3 (_win_charter_fade_apply, _win_plus_one_apply) and cleanup frees the rest.
+func _win_stage_charters_end() -> void:
+	pass
+
+# Stage 3, banner sweep: the winner-coloured band wipes in from the left while the
+# "<Name> wins!" title scales up on it. The confetti hooks in here (win variant only).
+# The title colour is chosen from the band's luminance so every seat colour stays
+# legible (see _win_banner_text_choice).
+func _win_stage_banner_begin() -> void:
+	_win_banner = ColorRect.new()
+	var band_col: Color = GameTypes.PLAYER_COLORS[_win_pid].darkened(0.15) if _win_pid >= 0 else Palette.TEXT_MUTED
+	_win_banner.color = band_col
+	_win_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_win_banner.clip_contents = true
+	_win_layer.add_child(_win_banner)
+	_win_banner_label = Label.new()
+	_win_banner_label.text = _splash_title.text
+	_win_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_win_banner_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_win_banner_label.add_theme_font_size_override("font_size", _win_banner_fit_font_size(str(_splash_title.text), get_viewport().get_visible_rect().size.x))
+	var pick := _win_banner_text_choice(band_col)
+	_win_banner_label.add_theme_color_override("font_color", pick["fill"])
+	_win_banner_label.add_theme_color_override("font_outline_color", pick["outline"])
+	_win_banner_label.add_theme_constant_override("outline_size", WIN_BANNER_TITLE_OUTLINE_PX)
+	_win_banner_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_win_banner.add_child(_win_banner_label)
+	_win_banner.visible = true
+	if _win_is_win_variant():
+		_win_confetti_begin()
+	_win_stage_banner_apply(0.0)
+
+# Title font size: WIN_BANNER_FONT_SIZE normally, shrunk one point at a time (never
+# below WIN_BANNER_FIT_FONT_MIN) until "<Name> wins!" plus its outline fits the
+# window width with WIN_BANNER_FIT_MARGIN_PX on both sides. The longest name the
+# game can show is the longest of GameTypes.PLAYER_NAMES ("Crimson", 7 chars —
+# names are not player-editable and no max_length applies to them).
+func _win_banner_fit_font_size(title: String, win_w: float) -> int:
+	var font := ThemeDB.fallback_font
+	if font == null:
+		return WIN_BANNER_FONT_SIZE
+	var limit := win_w - 2.0 * WIN_BANNER_FIT_MARGIN_PX
+	var size := WIN_BANNER_FONT_SIZE
+	while size > WIN_BANNER_FIT_FONT_MIN and font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size).x + 2.0 * float(WIN_BANNER_TITLE_OUTLINE_PX) > limit:
+		size -= 1
+	return size
+
+# WCAG-style relative luminance and contrast ratio.
+static func _wcag_luminance(c: Color) -> float:
+	var chans: Array[float] = [c.r, c.g, c.b]
+	var weights: Array[float] = [0.2126, 0.7152, 0.0722]
+	var sum := 0.0
+	for i in range(3):
+		var v := chans[i]
+		sum += weights[i] * (v / 12.92 if v <= 0.03928 else pow((v + 0.055) / 1.055, 2.4))
+	return sum
+
+static func _wcag_contrast(a: Color, b: Color) -> float:
+	var la := _wcag_luminance(a)
+	var lb := _wcag_luminance(b)
+	return (maxf(la, lb) + 0.05) / (minf(la, lb) + 0.05)
+
+# Title colour for a banner band: cream on dark bands, the darkest palette ink on
+# light ones (split at WIN_BANNER_SPLIT_LUMINANCE), each with its darker fallback so
+# the fill reaches at least WIN_BANNER_MIN_CONTRAST against the band. The outline is
+# the opposite tone. Cream fails on Red (4.49) and Blue (4.19) once the banner
+# darkens the seat colour, and Palette.INK fails on Orange (3.67), so the fallbacks
+# carry White / near-black; the ratios the choice settles on are Red 5.22 (white),
+# Blue 4.88 (white), Orange 6.13 (near-black), Ivory 6.61 (ink).
+static func _win_banner_text_choice(band: Color) -> Dictionary:
+	if _wcag_luminance(band) < WIN_BANNER_SPLIT_LUMINANCE:
+		if _wcag_contrast(WIN_BANNER_TEXT_CREAM, band) >= WIN_BANNER_MIN_CONTRAST:
+			return {"fill": WIN_BANNER_TEXT_CREAM, "outline": WIN_BANNER_TEXT_NEAR_BLACK}
+		return {"fill": WIN_BANNER_TEXT_WHITE, "outline": WIN_BANNER_TEXT_NEAR_BLACK}
+	if _wcag_contrast(WIN_BANNER_TEXT_INK, band) >= WIN_BANNER_MIN_CONTRAST:
+		return {"fill": WIN_BANNER_TEXT_INK, "outline": WIN_BANNER_TEXT_CREAM}
+	return {"fill": WIN_BANNER_TEXT_NEAR_BLACK, "outline": WIN_BANNER_TEXT_CREAM}
+
+func _win_stage_banner_apply(k: float) -> void:
+	if _win_banner == null or not is_instance_valid(_win_banner):
+		return
+	var win_size := get_viewport().get_visible_rect().size
+	var band_y := win_size.y * 0.5 - WIN_BANNER_HEIGHT_PX * 0.5 - WIN_BANNER_ABOVE_MIDDLE_PX
+	_win_banner.position = Vector2(0.0, band_y)
+	_win_banner.size = Vector2(win_size.x * k, WIN_BANNER_HEIGHT_PX)
+	if _win_banner_label == null or not is_instance_valid(_win_banner_label):
+		return
+	_win_banner_label.size = Vector2(win_size.x, WIN_BANNER_HEIGHT_PX)
+	_win_banner_label.pivot_offset = Vector2(win_size.x * 0.5, WIN_BANNER_HEIGHT_PX * 0.5)
+	var grow := 1.0 - pow(1.0 - k, 3.0)
+	var s := lerpf(WIN_BANNER_START_SCALE, 1.0, grow)
+	_win_banner_label.scale = Vector2(s, s)
+
+# The banner is not freed here: it shrinks and fades away over the first
+# WIN_BANNER_EXIT_SECONDS of stage 4, which frees it.
+func _win_stage_banner_end() -> void:
+	pass
+
+# Stage 4, standings: the panel fades and rises into place while the rows land one at
+# a time from last place up to 1st, each counting its VP up, and the button row fades
+# in last and becomes enabled only as the stage ends.
+func _win_stage_standings_begin() -> void:
+	_win_clear_spotlight()
+	_win_center_offset_y(WIN_PANEL_RISE_PX)
+	if _splash_panel != null and is_instance_valid(_splash_panel):
+		_splash_panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	for r in _win_rows:
+		if r != null and is_instance_valid(r):
+			r.visible = false
+			r.modulate = Color(1.0, 1.0, 1.0, 0.0)
+			r.scale = Vector2.ONE
+	for l in _win_vp_labels:
+		if l != null and is_instance_valid(l):
+			l.text = "0 VP"
+	if _splash_btn_row != null and is_instance_valid(_splash_btn_row):
+		_splash_btn_row.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_win_set_splash_buttons_enabled(false)
+	_splash_overlay.visible = true
+	_results_btn.visible = false
+
+func _win_stage_standings_apply(t: float) -> void:
+	_win_banner_exit(t)
+	var pk := clampf(t / WIN_PANEL_RISE_SECONDS, 0.0, 1.0)
+	if _splash_panel != null and is_instance_valid(_splash_panel):
+		_splash_panel.modulate = Color(1.0, 1.0, 1.0, pk)
+	_win_center_offset_y(WIN_PANEL_RISE_PX * (1.0 - pk))
+	for i in range(_win_rows.size()):
+		_win_apply_row(i, t)
+	var bt := t - (WIN_STANDINGS_SECONDS - WIN_BUTTONS_FADE_SECONDS)
+	if _splash_btn_row != null and is_instance_valid(_splash_btn_row):
+		_splash_btn_row.modulate = Color(1.0, 1.0, 1.0, clampf(bt / WIN_BUTTONS_FADE_SECONDS, 0.0, 1.0))
+
+func _win_banner_exit(t: float) -> void:
+	if _win_banner == null or not is_instance_valid(_win_banner):
+		return
+	var k := clampf(t / WIN_BANNER_EXIT_SECONDS, 0.0, 1.0)
+	if k >= 1.0:
+		_win_free_banner()
+		return
+	var win_size := get_viewport().get_visible_rect().size
+	var mid_y := win_size.y * 0.5 - WIN_BANNER_ABOVE_MIDDLE_PX
+	var h := WIN_BANNER_HEIGHT_PX * (1.0 - k)
+	_win_banner.position = Vector2(0.0, mid_y - h * 0.5)
+	_win_banner.size = Vector2(win_size.x, h)
+	_win_banner.modulate = Color(1.0, 1.0, 1.0, 1.0 - k)
+
+func _win_apply_row(i: int, t: float) -> void:
+	if i >= _win_rows.size():
+		return
+	var row: Control = _win_rows[i]
+	if row == null or not is_instance_valid(row):
+		return
+	var start := float(_win_rows.size() - 1 - i) * WIN_ROW_STAGGER_SECONDS
+	if t < start:
+		return
+	var rt := t - start
+	if not bool(row.visible):
+		row.visible = true
+	row.modulate = Color(1.0, 1.0, 1.0, clampf(rt / WIN_ROW_FADE_SECONDS, 0.0, 1.0))
+	if i == _win_winner_row:
+		row.pivot_offset = row.size * 0.5
+		var pop := 1.0
+		if rt < WIN_ROW_POP_SECONDS:
+			pop = 1.0 + (WIN_ROW_POP_SCALE - 1.0) * sin(PI * (rt / WIN_ROW_POP_SECONDS))
+		row.scale = Vector2(pop, pop)
+	if i < _win_vp_labels.size() and i < _win_vp_values.size():
+		var vp: Label = _win_vp_labels[i]
+		if vp != null and is_instance_valid(vp):
+			var vk := clampf(rt / WIN_VP_COUNT_SECONDS, 0.0, 1.0)
+			vp.text = "%d VP" % int(round(float(int(_win_vp_values[i])) * vk))
+
+func _win_stage_standings_end() -> void:
+	pass
+
+func _win_center_offset_y(px: float) -> void:
+	if _splash_center == null or not is_instance_valid(_splash_center):
+		return
+	_splash_center.offset_top = px
+	_splash_center.offset_bottom = px
+
+func _win_free_banner() -> void:
+	var b := _win_banner
+	_win_banner = null
+	_win_banner_label = null
+	if b != null and is_instance_valid(b):
+		if b.get_parent() != null:
+			b.get_parent().remove_child(b)
+		b.free()
+
+func _win_splash_buttons() -> Array:
+	return [_splash_review_btn, _splash_save_btn, _splash_new_game_btn, _splash_lobby_btn, _splash_view_board_btn, _splash_quit_btn]
+
+func _win_set_splash_buttons_enabled(on: bool) -> void:
+	for b in _win_splash_buttons():
+		if b != null and is_instance_valid(b):
+			(b as Button).disabled = not on
+	if on:
+		_apply_save_buttons()
+
+# Puts every results node back the way an instant _show_splash leaves it.
+func _win_reset_results_presentation() -> void:
+	_win_center_offset_y(0.0)
+	if _splash_panel != null and is_instance_valid(_splash_panel):
+		_splash_panel.modulate = Color(1, 1, 1, 1)
+	if _splash_btn_row != null and is_instance_valid(_splash_btn_row):
+		_splash_btn_row.modulate = Color(1, 1, 1, 1)
+	for r in _win_rows:
+		if r != null and is_instance_valid(r):
+			r.visible = true
+			r.modulate = Color(1, 1, 1, 1)
+			r.scale = Vector2.ONE
+	for i in range(_win_vp_labels.size()):
+		if i < _win_vp_values.size():
+			var l: Label = _win_vp_labels[i]
+			if l != null and is_instance_valid(l):
+				l.text = "%d VP" % int(_win_vp_values[i])
+	_win_set_splash_buttons_enabled(true)
+
+func _win_layer_cleanup() -> void:
+	if _win_layer != null and is_instance_valid(_win_layer):
+		for c in _win_layer.get_children():
+			if c.get_parent() == _win_layer:
+				_win_layer.remove_child(c)
+			c.free()
+		_win_layer.visible = false
+	_win_banner = null
+	_win_banner_label = null
+	_win_confetti = null
+	_win_charter_nodes.clear()
+	_win_plus_one_nodes.clear()
+	if _win_skip_catcher != null and is_instance_valid(_win_skip_catcher):
+		_win_skip_catcher.visible = false
+
+# The final state: exactly what _show_splash showed before the sequence existed.
+func _win_sequence_finish() -> void:
+	_win_stage = WIN_STAGE_DONE
+	_win_stage_t = 0.0
+	_win_clear_spotlight()
+	_win_layer_cleanup()
+	_win_reset_results_presentation()
 	_splash_overlay.visible = true
 	_results_btn.visible = false
 	_splash_new_game_btn.grab_focus()
+
+# A click or Esc/Enter/Space at any stage jumps to the final state in this frame.
+func _win_sequence_skip() -> void:
+	if _win_stage <= WIN_STAGE_NONE or _win_stage >= WIN_STAGE_DONE:
+		return
+	_win_sequence_finish()
+
+# The same teardown as a skip, for a match that is going away: the results stay hidden.
+func _win_sequence_cancel() -> void:
+	_win_clear_spotlight()
+	var busy := _win_stage > WIN_STAGE_NONE and _win_stage < WIN_STAGE_DONE
+	var leftovers := _win_layer != null and is_instance_valid(_win_layer) and _win_layer.get_child_count() > 0
+	if not busy and not leftovers:
+		return
+	_win_stage = WIN_STAGE_NONE
+	_win_stage_t = 0.0
+	_win_layer_cleanup()
+	_win_reset_results_presentation()
+
+# Esc / Enter / Space skips the win sequence; true when the key was consumed.
+func _win_skip_from_key(k: InputEventKey) -> bool:
+	if _win_stage <= WIN_STAGE_NONE or _win_stage >= WIN_STAGE_DONE:
+		return false
+	if not k.pressed or k.echo:
+		return false
+	if k.keycode != KEY_ESCAPE and k.keycode != KEY_ENTER and k.keycode != KEY_KP_ENTER and k.keycode != KEY_SPACE:
+		return false
+	_win_sequence_skip()
+	return true
+
+# True while stages 1..4 run: the results are still hidden, so _any_overlay_visible()
+# is false and the shortcut handlers in _input and _unhandled_key_input (Esc, F1,
+# digits, Space/R/E/T/B/M ...) would run behind the sequence. Checked right after
+# _win_skip_from_key in both paths: every key is either a skip or swallowed.
+func _win_stage_blocks_keys() -> bool:
+	return _win_stage > WIN_STAGE_NONE and _win_stage < WIN_STAGE_DONE
 
 func _show_lobby() -> void:
 	_finish_steal_anim()
@@ -1754,6 +2606,7 @@ func _show_lobby() -> void:
 		_seat_type_opts[i].select(_seat_type_opts[i].get_item_index(sel_type))
 	_update_lobby_seat_rows()
 	_lobby_cancel_btn.visible = session != null and session.state != null
+	_win_sequence_cancel()
 	if _splash_overlay != null:
 		_splash_overlay.visible = false
 	_show_overlay("lobby")
@@ -2057,6 +2910,12 @@ func _input(event: InputEvent) -> void:
 			_handle_review_key(rk.keycode)
 			get_viewport().set_input_as_handled()
 		return
+	if event is InputEventKey and _win_skip_from_key(event as InputEventKey):
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and _win_stage_blocks_keys():
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and _subpanel_container != null and _subpanel_container.visible:
 		var ek := event as InputEventKey
 		if ek.pressed and not ek.echo and ek.keycode == KEY_ESCAPE:
@@ -2088,6 +2947,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if _review_active:
 		_handle_review_key(k.keycode)
+		get_viewport().set_input_as_handled()
+		return
+	if _win_skip_from_key(k):
+		get_viewport().set_input_as_handled()
+		return
+	if _win_stage_blocks_keys():
 		get_viewport().set_input_as_handled()
 		return
 	var fo := get_viewport().gui_get_focus_owner()
@@ -2339,6 +3204,7 @@ func _start_match_from_lobby_settings() -> void:
 	_last_steal_serial = 0
 	_finish_steal_anim()
 	_reset_flight_state()
+	_win_sequence_cancel()
 	_splash_shown = false
 	session.start_match(seed_val, configs, _balanced_check.button_pressed)
 	_replay_saved_path = ""
@@ -2699,7 +3565,7 @@ func _on_state_updated(state: GameState, events: Array[String]) -> void:
 		if state.phase == GameTypes.TurnPhase.GAME_OVER:
 			if not _sfx_won:
 				_sfx_won = true
-				clip = "win"
+				clip = "win" if _win_variant_for_pid(int(state.winner)) else "lose"
 		elif rolled_now:
 			clip = "seven" if state.last_dice.x + state.last_dice.y == 7 else "roll"
 		elif built_now:
@@ -8443,6 +9309,8 @@ func _game_is_active() -> bool:
 		return true
 	if _splash_overlay != null and _splash_overlay.visible:
 		return true
+	if _win_stage > WIN_STAGE_NONE and _win_stage < WIN_STAGE_DONE:
+		return true
 	if _flight_layer != null and not _flight_layer.get_children().is_empty():
 		return true
 	if _toast_layer != null and not _toast_layer.get_children().is_empty():
@@ -8496,6 +9364,7 @@ func _process(delta: float) -> void:
 		_apply_window_layout()
 	if _dice_show_active:
 		_advance_dice_show(delta)
+	_advance_win_sequence(delta)
 	if _sb_focus_overlay != null and _sb_focus_overlay.visible:
 		_update_scoreboard_focus_overlay()
 	_trade_watch_pacing()
@@ -8761,6 +9630,7 @@ func _enter_review_from_replay(r: MatchReplay) -> void:
 func _begin_review(r: MatchReplay, seat_list: Array[SeatConfig]) -> void:
 	_finish_steal_anim()
 	_reset_flight_state()
+	_win_sequence_cancel()
 	_review_prev_banner = _turn_banner_label.text if _turn_banner_label != null else ""
 	_review_saved_log_lines = _log_lines.duplicate()
 	_real_session = session
@@ -9454,3 +10324,48 @@ class DicePairWidget extends Control:
 		var usable := DICE_SIZE - inset * 2.0
 		for p in pts:
 			draw_circle(origin + Vector2(inset + p.x * usable, inset + p.y * usable), 3.0, Palette.DICE_PIP)
+
+# The win-sequence confetti: WIN_CONFETTI_COUNT small rectangles drawn by this one
+# Control's _draw (never a node per piece). A piece's place at time t is computed from
+# its spawn data, not accumulated frame by frame, so a run is fully described by the
+# piece list — which comes from a RandomNumberGenerator seeded with the match seed —
+# and two runs of one seed agree piece for piece (piece_positions_at lets tests check
+# that without waiting for frames).
+class WinConfetti extends Control:
+	var pieces: Array = []
+	var piece_w := 6.0
+	var piece_h := 10.0
+	var elapsed := -1.0
+
+	func set_elapsed(t: float) -> void:
+		elapsed = t
+		queue_redraw()
+
+	func piece_pos(p: Dictionary, ft: float) -> Vector2:
+		return Vector2(
+			float(p["x"]) + float(p["vx"]) * ft + sin(ft * float(p["sway"]) + float(p["phase"])) * 8.0,
+			float(p["y"]) + float(p["vy"]) * ft
+		)
+
+	func piece_positions_at(t: float) -> PackedVector2Array:
+		var out := PackedVector2Array()
+		for p in pieces:
+			var ft := t - float(p["spawn"])
+			if ft < 0.0:
+				ft = 0.0
+			out.append(piece_pos(p, ft))
+		return out
+
+	func _draw() -> void:
+		if elapsed < 0.0:
+			return
+		for p in pieces:
+			var ft := elapsed - float(p["spawn"])
+			if ft < 0.0:
+				continue
+			var pos := piece_pos(p, ft)
+			if size.y > 4.0 and pos.y > size.y + piece_h:
+				continue
+			draw_set_transform(pos, float(p["rot"]) + float(p["spin"]) * ft, Vector2.ONE)
+			draw_rect(Rect2(-piece_w * 0.5, -piece_h * 0.5, piece_w, piece_h), p["col"] as Color)
+		draw_set_transform_matrix(Transform2D())

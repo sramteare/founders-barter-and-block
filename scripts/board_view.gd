@@ -101,8 +101,78 @@ var _layer_rect_local := Rect2()
 var _static_delta := Vector2(0.5, 0.5)
 var _layer_override := Vector2(1, 1)
 
+# Win sequence stage 1: while a spotlight pid is set, every piece that does not
+# belong to that player is mixed toward the colour's own luminance grey in the
+# cached land layer and the terrain gets a dark overlay; the winner's pieces stay
+# full colour and get a pulsing ring plus a brighter road outline in the dynamic
+# pass. The grey-out rides the static cache: the signature carries the pid and a
+# strength quantised to SPOTLIGHT_STRENGTH_STEPS, so a fade re-bakes the layers a
+# handful of times, never per frame, and clearing it restores the plain signature
+# so the board bakes back pixel-identical to before the spotlight.
+const SPOTLIGHT_GREY_MIX := 0.45
+const SPOTLIGHT_DIM_ALPHA := 0.18
+const SPOTLIGHT_STRENGTH_STEPS := 4.0
+const SPOTLIGHT_PULSE_HZ := 2.5
+
+var _spot_pid: int = -1
+var _spot_strength: float = 0.0
+var _spot_step: int = 0
+var _spot_phase: float = 0.0
+
+func set_spotlight(pid: int, strength: float) -> void:
+	var p := pid if pid >= 0 else -1
+	var s := clampf(strength, 0.0, 1.0)
+	var step := int(round(s * SPOTLIGHT_STRENGTH_STEPS)) if p >= 0 else 0
+	if p == _spot_pid and s == _spot_strength and step == _spot_step:
+		return
+	var rebake := p != _spot_pid or step != _spot_step
+	_spot_pid = p
+	_spot_strength = s
+	_spot_step = step
+	if rebake:
+		_static_dirty = true
+	queue_redraw()
+
+func clear_spotlight() -> void:
+	if _spot_pid == -1 and _spot_step == 0 and _spot_strength == 0.0:
+		return
+	var was_baked := _spot_step != 0
+	_spot_pid = -1
+	_spot_strength = 0.0
+	_spot_step = 0
+	_spot_phase = 0.0
+	if was_baked:
+		_static_dirty = true
+	queue_redraw()
+
+func spotlight_pid() -> int:
+	return _spot_pid
+
+func spotlight_strength() -> float:
+	return _spot_strength
+
+# The colour the board paints a piece of this owner with under the current
+# spotlight - full player colour for the winner or with no spotlight, greyed
+# otherwise. Tests read saturation through this instead of pixels.
+func spotlight_piece_color(owner_id: int) -> Color:
+	var col: Color = GameTypes.PLAYER_COLORS[owner_id % GameTypes.PLAYER_COLORS.size()]
+	if _spot_pid < 0 or _spot_step == 0 or owner_id == _spot_pid:
+		return col
+	return _spot_greyed(col)
+
+func _spot_greyed(col: Color) -> Color:
+	var k := SPOTLIGHT_GREY_MIX * float(_spot_step) / SPOTLIGHT_STRENGTH_STEPS
+	var lum := col.get_luminance()
+	return col.lerp(Color(lum, lum, lum), k)
+
+func _spot_active() -> bool:
+	return _spot_pid >= 0 and _spot_step > 0
+
 func _static_signature() -> String:
-	return hex_style + "|" + token_style + "|" + Palette.current_style
+	var sig := hex_style + "|" + token_style + "|" + Palette.current_style
+	if _spot_active():
+		sig += "|spot=%d:%d" % [_spot_pid, _spot_step]
+	return sig
 
 class BoardStaticLayer extends Control:
 	var view: BoardView = null
@@ -187,6 +257,9 @@ func _process(delta: float) -> void:
 		_blocker_t = minf(1.0, _blocker_t + delta / maxf(0.05, 0.9 * anim_scale))
 		if _blocker_t >= 1.0:
 			_static_dirty = true
+		needs_redraw = true
+	if _spot_pid >= 0:
+		_spot_phase += delta * TAU * SPOTLIGHT_PULSE_HZ
 		needs_redraw = true
 	if _static_state != state or _static_style_sig != _static_signature():
 		_static_dirty = true
@@ -564,6 +637,10 @@ func _draw() -> void:
 		_draw_clouds(hex_radius)
 		_draw_ports_structure(topo, hex_radius)
 		draw_texture_rect(_land_vp.get_texture(), _layer_rect_local, false)
+
+	# Win sequence stage 1: winner rings and road outlines, live so the pulse
+	# never touches the cached layers.
+	_draw_spotlight(topo, hex_radius)
 
 	# 5. Highlighted Tile Ring (for PICK_BLOCKER_TILE)
 	for t_id in highlighted_tiles:
@@ -1091,6 +1168,16 @@ func _render_static_land(ci: CanvasItem) -> void:
 			var b_offset: Vector2 = Vector2(hex_radius * 0.02, -hex_radius * 0.06) if num > 0 else Vector2.ZERO
 			_draw_blocker_icon(ci, t_center + b_offset, hex_radius, small_font_size)
 
+	# 5. Spotlight terrain dim: a dark overlay over the tile faces only, under
+	# the pieces, so the winner's pieces on top keep their full colour.
+	if _spot_active():
+		var dim := Color(0.0, 0.0, 0.0, SPOTLIGHT_DIM_ALPHA * float(_spot_step) / SPOTLIGHT_STRENGTH_STEPS)
+		for t_id in range(topo.tile_coords.size()):
+			var dim_pts := PackedVector2Array()
+			for v_id in topo.tile_vertices[t_id]:
+				dim_pts.append(_unit_to_screen(topo.vertex_positions[v_id], hex_radius))
+			ci.draw_colored_polygon(dim_pts, dim)
+
 	# 6. Built Roads
 	for e_id in range(topo.edge_vertices.size()):
 		var owner_id: int = state.edge_owner[e_id] if e_id < state.edge_owner.size() else -1
@@ -1101,6 +1188,8 @@ func _render_static_land(ci: CanvasItem) -> void:
 			var a := p1.lerp(p2, 0.12)
 			var b := p2.lerp(p1, 0.12)
 			var p_col: Color = GameTypes.PLAYER_COLORS[owner_id % GameTypes.PLAYER_COLORS.size()]
+			if _spot_active() and owner_id != _spot_pid:
+				p_col = _spot_greyed(p_col)
 			ci.draw_line(a + Vector2(0, hex_radius * 0.04), b + Vector2(0, hex_radius * 0.04), Palette.PAPER_SHADOW, max(8.0, hex_radius * 0.22), true)
 			ci.draw_line(a, b, Palette.INK, max(8.0, hex_radius * 0.22), true)
 			ci.draw_line(a, b, p_col, max(5.0, hex_radius * 0.14), true)
@@ -1118,6 +1207,8 @@ func _render_static_land(ci: CanvasItem) -> void:
 			continue
 		var vp := _unit_to_screen(topo.vertex_positions[v_id], hex_radius)
 		var p_col: Color = GameTypes.PLAYER_COLORS[owner_id % GameTypes.PLAYER_COLORS.size()]
+		if _spot_active() and owner_id != _spot_pid:
+			p_col = _spot_greyed(p_col)
 		if b_type == GameTypes.BuildingType.SETTLEMENT:
 			_draw_settlement(ci, vp, hex_radius * 0.22, p_col, owner_id % GameTypes.PLAYER_COLORS.size())
 		elif b_type == GameTypes.BuildingType.CITY:
@@ -1126,6 +1217,43 @@ func _render_static_land(ci: CanvasItem) -> void:
 	# 12a. Harbour badges — on top of everything land-related, over water only
 	if font != null:
 		_draw_static_port_badges(ci)
+
+# Dynamic win-sequence spotlight pass: a brighter outline on the winner's roads
+# (glow line under a redrawn road face, so only the outline sticks out) and a
+# pulsing ring on the winner's settlements and cities. Drawn live every frame;
+# the pulse phase comes from _process, two pulses fit the 0.8 s stage.
+func _draw_spotlight(topo: HexMath.BoardTopology, hex_radius: float) -> void:
+	if _spot_pid < 0 or state == null or _spot_strength <= 0.0:
+		return
+	var pulse := 0.5 + 0.5 * sin(_spot_phase)
+	var col: Color = GameTypes.PLAYER_COLORS[_spot_pid % GameTypes.PLAYER_COLORS.size()]
+	var bright := col.lightened(0.45)
+	for e_id in range(topo.edge_vertices.size()):
+		var owner_id: int = state.edge_owner[e_id] if e_id < state.edge_owner.size() else -1
+		if owner_id != _spot_pid or _edge_pop_active(e_id):
+			continue
+		var ev: Vector2i = topo.edge_vertices[e_id]
+		var p1 := _unit_to_screen(topo.vertex_positions[ev.x], hex_radius)
+		var p2 := _unit_to_screen(topo.vertex_positions[ev.y], hex_radius)
+		var a := p1.lerp(p2, 0.12)
+		var b := p2.lerp(p1, 0.12)
+		draw_line(a, b, Color(bright, _spot_strength * (0.5 + 0.5 * pulse)), max(13.0, hex_radius * 0.32), true)
+		draw_line(a + Vector2(0, hex_radius * 0.04), b + Vector2(0, hex_radius * 0.04), Color(Palette.PAPER_SHADOW, _spot_strength), max(8.0, hex_radius * 0.22), true)
+		draw_line(a, b, Color(Palette.INK, _spot_strength), max(8.0, hex_radius * 0.22), true)
+		draw_line(a, b, Color(col, _spot_strength), max(5.0, hex_radius * 0.14), true)
+	for v_id in range(topo.vertex_positions.size()):
+		var piece_owner: int = state.vertex_owner[v_id] if v_id < state.vertex_owner.size() else -1
+		if piece_owner != _spot_pid:
+			continue
+		var b_type: int = state.vertex_building[v_id] if v_id < state.vertex_building.size() else GameTypes.BuildingType.NONE
+		if b_type == GameTypes.BuildingType.NONE or _vertex_pop_active(v_id):
+			continue
+		var vp := _unit_to_screen(topo.vertex_positions[v_id], hex_radius)
+		var piece_r := hex_radius * (0.22 if b_type == GameTypes.BuildingType.SETTLEMENT else 0.28)
+		var ring_r := piece_r * (1.45 + 0.55 * pulse)
+		draw_circle(vp, ring_r, Color(bright, 0.2 * _spot_strength * (0.4 + 0.6 * pulse)))
+		draw_arc(vp, ring_r, 0.0, TAU, 36, Color(bright, _spot_strength * (0.5 + 0.5 * pulse)), maxf(3.0, hex_radius * 0.06), true)
+		draw_arc(vp, ring_r + maxf(2.5, hex_radius * 0.04), 0.0, TAU, 36, Color(col, _spot_strength * (0.3 + 0.4 * pulse)), maxf(1.6, hex_radius * 0.03), true)
 
 func _draw_clouds(hex_radius: float) -> void:
 	var cloud_span_x := size.x + 260.0

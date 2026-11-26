@@ -11,6 +11,10 @@ const PEAK: float = 0.25
 # Counts every play() call, even when muted or headless, so tests can verify.
 static var play_count: Dictionary = {}
 
+# The clip name last passed to play(), even when muted or headless, so tests
+# can see which one the game asked for.
+static var last_played: String = ""
+
 var _clips: Dictionary = {}
 var _players: Array[AudioStreamPlayer] = []
 
@@ -31,6 +35,7 @@ func _exit_tree() -> void:
 
 func play(name: String) -> void:
 	play_count[name] = int(play_count.get(name, 0)) + 1
+	last_played = name
 	if not _clips.has(name) or AudioServer.is_bus_mute(0):
 		return
 	if DisplayServer.get_name() == "headless":
@@ -74,11 +79,27 @@ func _build_clips() -> void:
 		_note(0.0, 0.18, 220.0, 10.0, 1),
 		_note(0.17, 0.22, 174.6, 8.0, 1),
 	]))
+	# Fuller fanfare, about 1.4 s: three rising pickup notes, a C-major answer,
+	# a lift and a long voiced top chord. Amplitudes stay inside the peak the
+	# other clips reach (measured against the "turn" clip's summed pair).
 	_clips["win"] = _wav(_mix([
-		_note(0.0, 0.14, 523.25, 7.0, 0),
-		_note(0.12, 0.14, 659.25, 7.0, 0),
-		_note(0.24, 0.14, 783.99, 7.0, 0),
-		_note(0.36, 0.3, 1046.5, 6.0, 0),
+		_note(0.00, 0.13, 523.25, 10.0, 0, 0.55),
+		_note(0.11, 0.13, 659.25, 10.0, 0, 0.55),
+		_note(0.22, 0.13, 783.99, 10.0, 0, 0.55),
+		_note(0.34, 0.26, 1046.50, 8.0, 0, 0.60),
+		_note(0.34, 0.26, 783.99, 9.0, 0, 0.30),
+		_note(0.60, 0.18, 880.00, 10.0, 0, 0.50),
+		_note(0.78, 0.62, 1046.50, 4.5, 0, 0.60),
+		_note(0.78, 0.62, 659.25, 5.0, 0, 0.28),
+		_note(0.78, 0.62, 523.25, 5.0, 0, 0.28),
+		_note(0.78, 0.62, 392.00, 5.0, 1, 0.10),
+	]))
+	# Loss variant, about 0.8 s: three soft descending sine notes, quieter than
+	# every other clip.
+	_clips["lose"] = _wav(_mix([
+		_note(0.00, 0.24, 440.00, 9.0, 0, 0.60),
+		_note(0.22, 0.24, 349.23, 9.0, 0, 0.55),
+		_note(0.44, 0.34, 293.66, 7.5, 0, 0.50),
 	]))
 	_clips["click"] = _wav(_mix([
 		_note(0.0, 0.025, 1200.0, 220.0, 1),
