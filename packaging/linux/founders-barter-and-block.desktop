@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Founders: Barter & Block
+Comment=Hex-board resource trading and strategy game
+Exec=/opt/founders-barter-and-block/founders-barter-and-block.x86_64
+Icon=founders-barter-and-block
+Terminal=false
+Categories=Game;BoardGame;StrategyGame;
+Keywords=board;strategy;trading;hex;founders;
