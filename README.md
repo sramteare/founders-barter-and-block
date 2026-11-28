@@ -8,7 +8,17 @@ In **Founders: Barter & Block**, players gather resources from a modular hex boa
 
 ## Play
 
-### Linux (x86_64)
+### Ubuntu, Debian and relatives (installer)
+
+Download `founders-barter-and-block_0.1.0_amd64.deb` from the [latest release](https://github.com/sramteare/founders-barter-and-block/releases/latest) and open it to install, or run:
+
+```
+sudo apt install ./founders-barter-and-block_0.1.0_amd64.deb
+```
+
+The game then appears in your app search as "Founders: Barter & Block". Remove it with `sudo apt remove founders-barter-and-block`.
+
+### Any Linux (x86_64, no install)
 
 Download `founders-barter-and-block-v0.1.0-linux-x86_64.zip` from the [latest release](https://github.com/sramteare/founders-barter-and-block/releases/latest), unzip it, and run:
 
@@ -51,6 +61,16 @@ godot4 --headless --path . --export-release "Linux" builds/founders-barter-and-b
 ```
 
 The result is a single file with the game data embedded. `builds/` is ignored by git.
+
+### Build the .deb installer
+
+After building the executable, on a system with `dpkg-deb`:
+
+```
+packaging/linux/build_deb.sh
+```
+
+This writes `builds/founders-barter-and-block_<version>_amd64.deb`, taking the version from `project.godot`.
 
 ## Platforms
 
