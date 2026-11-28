@@ -1,7 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <rect width="128" height="128" rx="24" fill="#1b2838"/>
-  <polygon points="64,16 106,40 106,88 64,112 22,88 22,40" fill="#e6b450" stroke="#f5d78e" stroke-width="5"/>
-  <polygon points="64,32 92,48 92,80 64,96 36,80 36,48" fill="#2d6a4f"/>
-  <circle cx="64" cy="64" r="14" fill="#fff8e7"/>
-  <text x="64" y="70" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle" fill="#b22222">8</text>
+  <polygon points="64,16 106,40 106,88 64,112 22,88 22,40" fill="#e6b450" stroke="#f5d78e" stroke-width="5" stroke-linejoin="round"/>
+  <g stroke="#1b2838" stroke-width="2" stroke-linejoin="round">
+    <!-- timber -->
+    <polygon points="64,64 64,28 95.2,46" fill="#2d6a4f"/>
+    <!-- grain -->
+    <polygon points="64,64 95.2,46 95.2,82" fill="#eebf59"/>
+    <!-- clay -->
+    <polygon points="64,64 95.2,82 64,100" fill="#cc7a59"/>
+    <!-- iron -->
+    <polygon points="64,64 64,100 32.8,82" fill="#8c99a8"/>
+    <!-- desert -->
+    <polygon points="64,64 32.8,82 32.8,46" fill="#f2e8d1"/>
+    <!-- fleece -->
+    <polygon points="64,64 32.8,46 64,28" fill="#8fbf5a"/>
+  </g>
 </svg>
